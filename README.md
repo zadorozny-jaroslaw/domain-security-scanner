@@ -49,7 +49,7 @@ The PDF generator uses Unicode fonts already installed on the host OS. Font file
 Clone the repository and create a virtual environment:
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/zadorozny-jaroslaw/domain-security-scanner.git
 cd domain-security-scanner
 python -m venv .venv
 ```
