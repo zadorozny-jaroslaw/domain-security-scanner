@@ -29,7 +29,7 @@ perform DoS tests, or attempt to access non-public data.
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import argparse
 import ipaddress
@@ -987,6 +987,7 @@ class Scanner:
         result = {"host": host}
         try:
             ctx = ssl.create_default_context()
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             with socket.create_connection((host, 443), timeout=TIMEOUT) as sock:
                 with ctx.wrap_socket(sock, server_hostname=host) as s:
                     cert = s.getpeercert()

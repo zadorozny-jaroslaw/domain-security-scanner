@@ -4,6 +4,14 @@ All notable project changes are documented here.
 
 The project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-09-17
+
+### Fixed
+
+- Require TLS 1.2 or newer for the scanner's normal TLS connection path.
+- Preserve the separate legacy-TLS capability probe for intentionally testing TLS 1.0 and TLS 1.1 support.
+- Address the CodeQL `py/insecure-protocol` finding for standard TLS checks.
+
 ## [1.0.0] - 2026-09-17
 
 ### Added
