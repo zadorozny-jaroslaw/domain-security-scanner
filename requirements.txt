@@ -1,0 +1,4 @@
+dnspython==2.8.0
+requests==2.34.2
+beautifulsoup4==4.15.0
+reportlab==5.0.1

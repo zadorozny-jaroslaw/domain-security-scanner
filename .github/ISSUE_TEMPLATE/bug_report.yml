@@ -1,0 +1,58 @@
+name: Bug report
+description: Report incorrect scanner behavior, a crash, or a false result.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not paste secrets, customer reports, private email addresses, credentials, or sensitive target data.
+
+  - type: input
+    id: version
+    attributes:
+      label: Scanner version
+      description: Run `python domain_security_scan.py --version`.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and Python version.
+      placeholder: "Windows 11, Python 3.13"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the observed and expected behavior. Redact target details if they are not safe to publish.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide a minimal reproduction. Do not include third-party secrets or unauthorized target data.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Paste only sanitized console output or JSON fragments.
+      render: shell
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I removed credentials, secrets, and sensitive customer/target data from this report.
+          required: true

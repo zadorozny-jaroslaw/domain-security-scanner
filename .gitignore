@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Generated scanner reports - may contain customer/target information
+security-report-*.pdf
+security-report-*.json
+*-security-report.pdf
+*-security-report.json
+reports/
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local test/render output
+_render*/
+render/
+test_*.pdf
+*.pyc

@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new low-impact posture check or project improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before proposing a new security check, please read `docs/SCOPE.md`.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What operator/customer problem would this solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: signal
+    attributes:
+      label: Proposed external signal
+      description: What low-impact evidence would the scanner observe?
+    validations:
+      required: true
+
+  - type: textarea
+    id: false_positives
+    attributes:
+      label: False-positive / uncertainty handling
+      description: When could the signal be misleading, and when should the scanner return VERIFY/UNKNOWN?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: The proposal does not require vulnerability exploitation, credential attacks, broad port scanning, DoS/load testing, or access to non-public data.
+          required: true
