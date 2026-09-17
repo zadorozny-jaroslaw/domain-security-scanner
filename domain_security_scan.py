@@ -29,7 +29,7 @@ perform DoS tests, or attempt to access non-public data.
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import argparse
 import ipaddress

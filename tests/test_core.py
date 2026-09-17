@@ -5,7 +5,7 @@ import domain_security_scan as scanner
 
 class CoreHelpersTest(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(scanner.__version__, "1.0.0")
+        self.assertEqual(scanner.__version__, "1.0.1")
 
     def test_normalize_domain_preserves_web_host(self):
         self.assertEqual(
