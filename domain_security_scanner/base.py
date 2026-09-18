@@ -6,7 +6,7 @@ import dns.resolver
 import requests
 
 from .constants import USER_AGENT
-from .models import Check
+from .models import Check, CheckCategory, CheckStatus
 from .utils import fallback_root_domain, normalize_domain
 
 
@@ -37,5 +37,14 @@ class BaseScanner:
         self.tls: dict[str, Any] = {}
         self.mail: dict[str, Any] = {}
 
-    def add_check(self, category, name, status, message, weight=0, earned=0, applicable=True):
+    def add_check(
+        self,
+        category: CheckCategory | str,
+        name: str,
+        status: CheckStatus | str,
+        message: str,
+        weight: float = 0,
+        earned: float = 0,
+        applicable: bool = True,
+    ) -> None:
         self.checks.append(Check(category, name, status, message, weight, earned, applicable))
