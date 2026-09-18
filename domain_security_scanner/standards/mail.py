@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Iterable
+from urllib.parse import urlsplit
 
 
 _MX_RE = re.compile(r"^\s*(\d{1,5})\s+(\S+)\s*$")
@@ -258,4 +259,112 @@ def analyze_mta_sts_mx_coverage(mx_hosts: Iterable[str], patterns: Iterable[str]
         "matched": [host for host in hosts if host not in unmatched],
         "unmatched": unmatched,
         "complete": not unmatched,
+    }
+
+
+_TLSRPT_EXTENSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+_TLSRPT_EXTENSION_VALUE_RE = re.compile(r"^[\x21-\x3A\x3C\x3E-\x7E]+$")
+
+
+def _validate_tls_rpt_uri(uri: str) -> str | None:
+    if not uri:
+        return "empty rua URI"
+    if "!" in uri:
+        return f"TLS-RPT URI contains an unencoded '!': {uri}"
+
+    parsed = urlsplit(uri)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"mailto", "https"}:
+        return f"unsupported TLS-RPT rua URI scheme: {scheme or '<missing>'}"
+    if scheme == "mailto":
+        address = parsed.path
+        if not address or "@" not in address or any(ch.isspace() for ch in address):
+            return f"invalid mailto TLS-RPT URI: {uri}"
+    elif not parsed.netloc or parsed.hostname is None:
+        return f"invalid https TLS-RPT URI: {uri}"
+    return None
+
+
+def analyze_tls_rpt_txt(records: Iterable[str]) -> dict:
+    """Validate an RFC 8460 TLSRPT policy from `_smtp._tls` TXT records."""
+
+    values = [str(value).strip() for value in records]
+    declared = [value for value in values if re.match(r"^v=TLSRPTv1(?:\s*;|$)", value)]
+    candidates = [value for value in values if re.match(r"^v=TLSRPTv1\s*;", value)]
+    errors: list[str] = []
+
+    if not declared:
+        return {
+            "configured": False,
+            "valid": False,
+            "candidate_count": 0,
+            "record": None,
+            "rua": [],
+            "extensions": {},
+            "errors": [],
+        }
+
+    if len(candidates) != 1:
+        if not candidates:
+            errors.append("TLS-RPT TXT record must begin with 'v=TLSRPTv1;'")
+        else:
+            errors.append("exactly one usable TLS-RPT TXT record is required")
+        return {
+            "configured": True,
+            "valid": False,
+            "candidate_count": len(candidates),
+            "record": candidates[0] if len(candidates) == 1 else None,
+            "rua": [],
+            "extensions": {},
+            "errors": errors,
+        }
+
+    record = candidates[0]
+    terms = [part.strip() for part in record.split(";")]
+    if terms and terms[-1] == "":
+        terms.pop()
+    if not terms or terms[0] != "v=TLSRPTv1":
+        errors.append("v=TLSRPTv1 must be the first field")
+
+    rua: list[str] = []
+    extensions: dict[str, list[str]] = {}
+    for term in terms[1:]:
+        if not term or "=" not in term:
+            errors.append(f"invalid TLS-RPT field: {term or '<empty>'}")
+            continue
+        key, value = term.split("=", 1)
+        if key != key.strip() or value != value.strip():
+            errors.append(f"invalid whitespace around '=' in field: {term}")
+            continue
+        if key == "rua":
+            destinations = [item.strip() for item in value.split(",") if item.strip()]
+            if not destinations:
+                errors.append("rua must contain at least one URI")
+                continue
+            for destination in destinations:
+                uri_error = _validate_tls_rpt_uri(destination)
+                if uri_error:
+                    errors.append(uri_error)
+                else:
+                    rua.append(destination)
+            continue
+
+        if not _TLSRPT_EXTENSION_NAME_RE.fullmatch(key):
+            errors.append(f"invalid TLS-RPT extension field name: {key}")
+        elif not _TLSRPT_EXTENSION_VALUE_RE.fullmatch(value):
+            errors.append(f"invalid TLS-RPT extension value for {key}")
+        else:
+            extensions.setdefault(key, []).append(value)
+
+    if not rua:
+        errors.append("required rua field is missing or has no valid URI")
+
+    return {
+        "configured": True,
+        "valid": not errors,
+        "candidate_count": 1,
+        "record": record,
+        "rua": rua,
+        "extensions": extensions,
+        "errors": errors,
     }

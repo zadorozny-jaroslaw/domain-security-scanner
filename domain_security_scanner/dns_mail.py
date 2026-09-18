@@ -12,10 +12,12 @@ from .constants import COMMON_DKIM_SELECTORS, COMMON_DNS_TYPES, TIMEOUT
 from .models import DnsQueryResult, DnsQueryState
 from .standards import (
     RFC_7505,
+    RFC_8460,
     RFC_8461,
     analyze_mta_sts_mx_coverage,
     analyze_mta_sts_txt,
     analyze_mx_records,
+    analyze_tls_rpt_txt,
     parse_mta_sts_policy,
 )
 
@@ -488,6 +490,47 @@ class DnsMailMixin:
                 3, 3
             )
 
+    def _check_tls_rpt(self) -> None:
+        """Validate the RFC 8460 TLS Reporting DNS policy."""
+        result = self.dns_query_result(f"_smtp._tls.{self.root_domain}", "TXT")
+        records = [self._normalize_txt_record(value) for value in result.records]
+        analysis = analyze_tls_rpt_txt(records)
+        declared = [value for value in records if value.startswith("v=TLSRPTv1")]
+        self.mail["tls_rpt"] = declared
+        self.mail["tls_rpt_analysis"] = {
+            **analysis,
+            "standard": RFC_8460.label,
+        }
+
+        if result.failed:
+            self.mail["tls_rpt_analysis"]["dns_evidence"] = result.state.value
+            self.add_check(
+                "Mail", "TLS-RPT", "unknown",
+                f"Nie można wiarygodnie ocenić TLS-RPT z powodu błędu DNS "
+                f"({self._dns_unavailable_message(result)}).",
+                2, 0, False
+            )
+        elif not analysis["configured"]:
+            self.add_check(
+                "Mail", "TLS-RPT", "info",
+                f"Nie wykryto polityki TLS-RPT ({RFC_8460.label}) dla {self.root_domain}.",
+                2, 0
+            )
+        elif not analysis["valid"]:
+            self.add_check(
+                "Mail", "TLS-RPT", "fail",
+                f"Polityka TLS-RPT jest nieprawidłowa wg {RFC_8460.label}: "
+                + "; ".join(analysis["errors"][:3]),
+                2, 0
+            )
+        else:
+            self.add_check(
+                "Mail", "TLS-RPT", "pass",
+                f"Polityka TLS-RPT jest poprawna i zawiera {len(analysis['rua'])} "
+                f"adres(y) raportowania ({RFC_8460.label}).",
+                2, 2
+            )
+
     def collect_dns(self):
         # Registration/domain and mail checks always use the registered root domain.
         # Web checks continue to use the exact target host supplied by the user.
@@ -794,18 +837,4 @@ class DnsMailMixin:
         else:
             self._check_mta_sts(mx_analysis)
 
-            tls_rpt_result = self.dns_query_result(f"_smtp._tls.{self.root_domain}", "TXT")
-            tls_rpt = [x for x in tls_rpt_result.records if "v=tlsrptv1" in x.lower()]
-            self.mail["tls_rpt"] = tls_rpt
-            if tls_rpt:
-                self.add_check("Mail", "TLS-RPT", "pass", "Wykryto rekord TLS-RPT.", 2, 2)
-            elif tls_rpt_result.failed:
-                self.add_check(
-                    "Mail", "TLS-RPT", "unknown",
-                    f"Nie można wiarygodnie ocenić TLS-RPT z powodu błędu DNS "
-                    f"({self._dns_unavailable_message(tls_rpt_result)}).",
-                    2, 0, False
-                )
-            else:
-                self.add_check("Mail", "TLS-RPT", "info",
-                               f"Nie wykryto TLS-RPT dla {self.root_domain}.", 2, 0)
+            self._check_tls_rpt()

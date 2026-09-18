@@ -197,3 +197,88 @@ class MtaStsRfc8461Test(unittest.TestCase):
         check = next(check for check in instance.checks if check.name == "MTA-STS")
         self.assertEqual(check.status, "fail")
         self.assertIn("przekierowaniami", check.message)
+
+
+class TlsRptRfc8460Test(unittest.TestCase):
+    def test_tls_rpt_accepts_mailto_and_https_rua(self):
+        from domain_security_scanner.standards import analyze_tls_rpt_txt
+
+        analysis = analyze_tls_rpt_txt([
+            "v=TLSRPTv1; rua=mailto:tls@example.com, https://reports.example.com/tlsrpt"
+        ])
+        self.assertTrue(analysis["valid"])
+        self.assertEqual(len(analysis["rua"]), 2)
+
+    def test_tls_rpt_accepts_rfc_whitespace_before_semicolon(self):
+        from domain_security_scanner.standards import analyze_tls_rpt_txt
+
+        analysis = analyze_tls_rpt_txt(["v=TLSRPTv1 ; rua=mailto:tls@example.com"])
+        self.assertTrue(analysis["valid"])
+
+    def test_tls_rpt_accepts_unknown_extension_fields(self):
+        from domain_security_scanner.standards import analyze_tls_rpt_txt
+
+        analysis = analyze_tls_rpt_txt([
+            "v=TLSRPTv1; rua=mailto:tls@example.com; x-vendor=enabled"
+        ])
+        self.assertTrue(analysis["valid"])
+        self.assertEqual(analysis["extensions"]["x-vendor"], ["enabled"])
+
+    def test_tls_rpt_requires_rua(self):
+        from domain_security_scanner.standards import analyze_tls_rpt_txt
+
+        analysis = analyze_tls_rpt_txt(["v=TLSRPTv1; x-vendor=enabled"])
+        self.assertFalse(analysis["valid"])
+        self.assertTrue(any("rua" in error for error in analysis["errors"]))
+
+    def test_tls_rpt_rejects_unsupported_uri_scheme(self):
+        from domain_security_scanner.standards import analyze_tls_rpt_txt
+
+        analysis = analyze_tls_rpt_txt([
+            "v=TLSRPTv1; rua=ftp://reports.example.com/tlsrpt"
+        ])
+        self.assertFalse(analysis["valid"])
+        self.assertTrue(any("scheme" in error for error in analysis["errors"]))
+
+    def test_tls_rpt_rejects_multiple_policy_records(self):
+        from domain_security_scanner.standards import analyze_tls_rpt_txt
+
+        analysis = analyze_tls_rpt_txt([
+            "v=TLSRPTv1; rua=mailto:one@example.com",
+            "v=TLSRPTv1; rua=mailto:two@example.com",
+        ])
+        self.assertFalse(analysis["valid"])
+        self.assertEqual(analysis["candidate_count"], 2)
+
+    def test_scanner_passes_valid_tls_rpt_policy(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("example.com", "MX"): _FakeAnswer(["10 mail.example.com."]),
+            ("_smtp._tls.example.com", "TXT"): _FakeAnswer([
+                '"v=TLSRPTv1; rua=mailto:tls@example.com"'
+            ]),
+        })
+        instance.session.get = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline"))
+
+        instance.collect_dns()
+
+        check = next(check for check in instance.checks if check.name == "TLS-RPT")
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(check.earned, 2)
+        self.assertTrue(instance.mail["tls_rpt_analysis"]["valid"])
+
+    def test_scanner_fails_malformed_tls_rpt_policy(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("example.com", "MX"): _FakeAnswer(["10 mail.example.com."]),
+            ("_smtp._tls.example.com", "TXT"): _FakeAnswer([
+                '"v=TLSRPTv1; rua=ftp://reports.example.com/tlsrpt"'
+            ]),
+        })
+        instance.session.get = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline"))
+
+        instance.collect_dns()
+
+        check = next(check for check in instance.checks if check.name == "TLS-RPT")
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.earned, 0)
