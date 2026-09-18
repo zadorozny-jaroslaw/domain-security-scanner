@@ -21,7 +21,7 @@ The example below was generated against a maintainer-controlled WordPress test h
 - Exact web-target checks while registration and mail checks follow the registered/root domain
 - RDAP, DNSSEC, CAA, nameserver and expiry checks
 - Certificate Transparency subdomain discovery through `crt.sh`
-- DNS inventory and same-site crawling
+- DNS inventory with resolver-error awareness and same-site crawling
 - HTTPS/TLS certificate analysis and legacy TLS detection
 - HTTP-to-HTTPS redirect and mixed-content checks
 - Customer-facing HTTP security-header findings
@@ -202,7 +202,7 @@ WARN and FAIL findings include a short **Why it matters** explanation. The wordi
 
 The score is intentionally named **External Security Hygiene Score**, not a general "security score."
 
-Only applicable weighted checks contribute to the denominator. Unknown/unverifiable checks are excluded rather than penalized. Several useful findings - including CMS release currency - are informational or advisory and intentionally have no score weight.
+Only applicable weighted checks contribute to the denominator. Unknown/unverifiable checks are excluded rather than penalized. DNS timeouts, SERVFAIL responses and resolver errors are treated as unavailable evidence rather than as proof that a record is absent. Several useful findings - including CMS release currency - are informational or advisory and intentionally have no score weight.
 
 See [docs/SCORING.md](docs/SCORING.md) for the scoring philosophy.
 

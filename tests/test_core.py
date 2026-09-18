@@ -1,6 +1,10 @@
 import unittest
 
+import dns.exception
+import dns.resolver
+
 import domain_security_scan as scanner
+from domain_security_scanner.models import DnsQueryState
 
 
 class CoreHelpersTest(unittest.TestCase):
@@ -90,6 +94,127 @@ class ResultModelsTest(unittest.TestCase):
         self.assertIs(type(report["checks"][0]["status"]), str)
         self.assertEqual(report["checks"][0]["category"], "Domain")
         self.assertEqual(report["checks"][0]["status"], "pass")
+
+
+class _FakeRecord:
+    def __init__(self, value):
+        self.value = value
+
+    def to_text(self):
+        return self.value
+
+
+class _FakeAnswer(list):
+    def __init__(self, records=()):
+        super().__init__(_FakeRecord(x) for x in records)
+        self.rrset = object() if records else None
+
+
+class _FakeResolver:
+    def __init__(self, responses=None):
+        self.responses = responses or {}
+        self.calls = []
+
+    def resolve(self, host, rtype, raise_on_no_answer=False):
+        key = (host.lower().rstrip("."), rtype.upper())
+        self.calls.append(key)
+        response = self.responses.get(key, _FakeAnswer())
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+class DnsEvidenceTest(unittest.TestCase):
+    def test_dns_query_result_caches_successful_answer(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("example.com", "MX"): _FakeAnswer(["10 mail.example.com."])
+        })
+
+        first = instance.dns_query_result("Example.COM.", "mx")
+        second = instance.dns_query("example.com", "MX")
+
+        self.assertEqual(first.state, DnsQueryState.ANSWER)
+        self.assertEqual(first.records, ("10 mail.example.com.",))
+        self.assertEqual(second, ["10 mail.example.com."])
+        self.assertEqual(instance.resolver.calls, [("example.com", "MX")])
+
+    def test_dns_timeout_is_not_treated_as_absent(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("example.com", "TXT"): dns.exception.Timeout(timeout=1)
+        })
+
+        result = instance.dns_query_result("example.com", "TXT")
+
+        self.assertEqual(result.state, DnsQueryState.TIMEOUT)
+        self.assertTrue(result.failed)
+        self.assertFalse(result.absent)
+        self.assertEqual(instance.dns_query("example.com", "TXT"), [])
+        self.assertEqual(len(instance.resolver.calls), 1)
+
+    def test_dns_no_answer_is_conclusive_absence(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver()
+
+        result = instance.dns_query_result("example.com", "CAA")
+
+        self.assertEqual(result.state, DnsQueryState.NO_ANSWER)
+        self.assertTrue(result.absent)
+        self.assertFalse(result.failed)
+
+    def test_nxdomain_is_conclusive_absence(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("missing.example.com", "TXT"): dns.resolver.NXDOMAIN()
+        })
+
+        result = instance.dns_query_result("missing.example.com", "TXT")
+
+        self.assertEqual(result.state, DnsQueryState.NXDOMAIN)
+        self.assertTrue(result.absent)
+        self.assertFalse(result.failed)
+
+    def test_spf_becomes_unknown_when_root_txt_lookup_times_out(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("example.com", "TXT"): dns.exception.Timeout(timeout=1)
+        })
+        instance.session.get = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline"))
+
+        instance.collect_dns()
+        spf = next(check for check in instance.checks if check.name == "SPF")
+
+        self.assertEqual(spf.status, "unknown")
+        self.assertFalse(spf.applicable)
+        self.assertNotIn(8, [check.weight for check in instance.checks if check.name == "SPF" and check.applicable])
+
+    def test_spf_missing_still_fails_on_conclusive_no_answer(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver()
+        instance.session.get = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline"))
+
+        instance.collect_dns()
+        spf = next(check for check in instance.checks if check.name == "SPF")
+
+        self.assertEqual(spf.status, "fail")
+        self.assertTrue(spf.applicable)
+        self.assertEqual(spf.weight, 8)
+
+    def test_spf_budget_marks_incomplete_nested_dns_evidence(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("_spf.example.net", "TXT"): dns.exception.Timeout(timeout=1)
+        })
+
+        result = instance._estimate_spf_dns_lookups(
+            "example.com",
+            "v=spf1 include:_spf.example.net -all",
+        )
+
+        self.assertEqual(result["count"], 1)
+        self.assertFalse(result["complete"])
+        self.assertTrue(any("could not be resolved" in note for note in result["notes"]))
 
 
 if __name__ == "__main__":

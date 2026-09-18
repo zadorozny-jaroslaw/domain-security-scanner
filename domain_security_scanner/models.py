@@ -23,6 +23,41 @@ class CheckCategory(StrEnum):
     WEB = "Web"
 
 
+class DnsQueryState(StrEnum):
+    """Outcome of one DNS lookup, separating absence from resolver failure."""
+
+    ANSWER = "answer"
+    NO_ANSWER = "no_answer"
+    NXDOMAIN = "nxdomain"
+    TIMEOUT = "timeout"
+    SERVFAIL = "servfail"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class DnsQueryResult:
+    """Typed DNS evidence used internally without changing report record lists."""
+
+    host: str
+    rtype: str
+    state: DnsQueryState
+    records: tuple[str, ...] = ()
+    error: str | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.state in {
+            DnsQueryState.TIMEOUT,
+            DnsQueryState.SERVFAIL,
+            DnsQueryState.ERROR,
+        }
+
+    @property
+    def absent(self) -> bool:
+        return self.state in {DnsQueryState.NO_ANSWER, DnsQueryState.NXDOMAIN}
+
+
+
 @dataclass
 class Check:
     category: CheckCategory

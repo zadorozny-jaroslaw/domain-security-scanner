@@ -4,20 +4,61 @@ import ipaddress
 import re
 from typing import Any, Optional
 
+import dns.exception
+import dns.resolver
+
 from .constants import COMMON_DKIM_SELECTORS, COMMON_DNS_TYPES, TIMEOUT
+from .models import DnsQueryResult, DnsQueryState
 
 
 class DnsMailMixin:
     """DNS inventory and mail-security checks."""
 
-    def dns_query(self, host: str, rtype: str) -> list[str]:
+    def dns_query_result(self, host: str, rtype: str) -> DnsQueryResult:
+        """Return cached DNS evidence while preserving absence vs resolver failure."""
+        host_key = host.lower().rstrip(".")
+        rtype_key = rtype.upper()
+        cache_key = (host_key, rtype_key)
+        cached = self.dns_query_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         try:
-            ans = self.resolver.resolve(host, rtype, raise_on_no_answer=False)
+            ans = self.resolver.resolve(host_key, rtype_key, raise_on_no_answer=False)
             if ans.rrset is None:
-                return []
-            return [r.to_text() for r in ans]
-        except Exception:
-            return []
+                result = DnsQueryResult(host_key, rtype_key, DnsQueryState.NO_ANSWER)
+            else:
+                result = DnsQueryResult(
+                    host_key,
+                    rtype_key,
+                    DnsQueryState.ANSWER,
+                    tuple(r.to_text() for r in ans),
+                )
+        except dns.resolver.NXDOMAIN:
+            result = DnsQueryResult(host_key, rtype_key, DnsQueryState.NXDOMAIN)
+        except (dns.resolver.LifetimeTimeout, dns.exception.Timeout) as exc:
+            result = DnsQueryResult(host_key, rtype_key, DnsQueryState.TIMEOUT, error=str(exc))
+        except dns.resolver.NoNameservers as exc:
+            state = DnsQueryState.SERVFAIL if "SERVFAIL" in str(exc).upper() else DnsQueryState.ERROR
+            result = DnsQueryResult(host_key, rtype_key, state, error=str(exc))
+        except Exception as exc:
+            result = DnsQueryResult(host_key, rtype_key, DnsQueryState.ERROR, error=str(exc))
+
+        self.dns_query_cache[cache_key] = result
+        return result
+
+    def dns_query(self, host: str, rtype: str) -> list[str]:
+        """Compatibility wrapper returning only records for inventory/report output."""
+        return list(self.dns_query_result(host, rtype).records)
+
+    @staticmethod
+    def _dns_unavailable_message(result: DnsQueryResult) -> str:
+        labels = {
+            DnsQueryState.TIMEOUT: "timeout",
+            DnsQueryState.SERVFAIL: "SERVFAIL",
+            DnsQueryState.ERROR: "resolver error",
+        }
+        return labels.get(result.state, result.state.value)
 
     @staticmethod
     def _normalize_txt_record(value: str) -> str:
@@ -102,34 +143,82 @@ class DnsMailMixin:
             errors.append("more than one exp modifier")
         return {"valid": not errors, "errors": errors, "warnings": warnings_list, "terms": terms}
 
-    def _estimate_spf_dns_lookups(self, domain: str, record: str, visited: Optional[set[str]] = None, depth: int = 0) -> dict[str, Any]:
-        """Estimate worst-case SPF DNS-querying terms, including nested include/redirect.
+    def _estimate_spf_dns_lookups(
+        self,
+        domain: str,
+        record: str,
+        visited: Optional[set[str]] = None,
+        depth: int = 0,
+    ) -> dict[str, Any]:
+        """Estimate worst-case SPF DNS terms and track incomplete DNS evidence.
 
         RFC 7208 limits include/a/mx/ptr/exists plus redirect to 10 terms during
-        evaluation, including nested include/redirect processing. Mechanisms after
-        the first `all` are ignored, and `redirect` is ignored when an `all`
-        mechanism exists anywhere in the record. Macro-based targets are counted
-        but cannot always be expanded statically.
+        evaluation, including nested include/redirect processing. Resolver failures
+        must not be interpreted as an absent child SPF record or a complete budget.
         """
         if visited is None:
             visited = set()
         key = domain.lower().rstrip(".")
         if key in visited:
-            return {"count": 0, "breakdown": [], "notes": [f"cycle detected at {domain}"]}
+            return {
+                "count": 0,
+                "breakdown": [],
+                "notes": [f"cycle detected at {domain}"],
+                "complete": True,
+            }
         if depth > 12:
-            return {"count": 0, "breakdown": [], "notes": ["SPF recursion depth limit reached"]}
+            return {
+                "count": 0,
+                "breakdown": [],
+                "notes": ["SPF recursion depth limit reached"],
+                "complete": False,
+            }
         visited = set(visited)
         visited.add(key)
 
         count = 0
         breakdown: list[str] = []
         notes: list[str] = []
+        complete = True
         terms = self._spf_terms(record)[1:]
 
         def bare_token(raw: str) -> str:
             return raw[1:] if raw and raw[0] in "+-~?" else raw
 
-        has_all = any(re.split(r"[:/]", bare_token(x).lower(), maxsplit=1)[0] == "all" for x in terms if "=" not in bare_token(x))
+        def child_spf(target: str, kind: str) -> None:
+            nonlocal count, complete
+            result = self.dns_query_result(target, "TXT")
+            if result.failed:
+                complete = False
+                notes.append(
+                    f"{kind} target {target} could not be resolved "
+                    f"({self._dns_unavailable_message(result)})"
+                )
+                return
+
+            child_records = [
+                self._normalize_txt_record(x)
+                for x in result.records
+                if self._normalize_txt_record(x).lower().startswith("v=spf1")
+            ]
+            if len(child_records) == 1:
+                child = self._estimate_spf_dns_lookups(
+                    target, child_records[0], visited, depth + 1
+                )
+                count += child["count"]
+                breakdown.extend([f"  {x}" for x in child["breakdown"]])
+                notes.extend(child["notes"])
+                complete = complete and child.get("complete", True)
+            elif len(child_records) == 0:
+                notes.append(f"{kind} target {target} has no SPF record")
+            else:
+                notes.append(f"{kind} target {target} has multiple SPF records")
+
+        has_all = any(
+            re.split(r"[:/]", bare_token(x).lower(), maxsplit=1)[0] == "all"
+            for x in terms
+            if "=" not in bare_token(x)
+        )
 
         for raw in terms:
             token = bare_token(raw)
@@ -142,25 +231,19 @@ class DnsMailMixin:
                 count += 1
                 breakdown.append(f"redirect={target}")
                 if target and "%" not in target and count <= 20:
-                    child_records = [x for x in self._txt_records(target) if x.lower().startswith("v=spf1")]
-                    if len(child_records) == 1:
-                        child = self._estimate_spf_dns_lookups(target, child_records[0], visited, depth + 1)
-                        count += child["count"]
-                        breakdown.extend([f"  {x}" for x in child["breakdown"]])
-                        notes.extend(child["notes"])
-                    elif len(child_records) == 0:
-                        notes.append(f"redirect target {target} has no SPF record")
-                    else:
-                        notes.append(f"redirect target {target} has multiple SPF records")
+                    child_spf(target, "redirect")
                 elif target and "%" in target:
-                    notes.append(f"cannot recursively evaluate macro-based redirect target: {target}")
+                    notes.append(
+                        f"cannot recursively evaluate macro-based redirect target: {target}"
+                    )
                 if count > 20:
-                    notes.append("lookup expansion stopped after clearly exceeding the SPF limit")
+                    notes.append(
+                        "lookup expansion stopped after clearly exceeding the SPF limit"
+                    )
                     break
                 continue
 
             if "=" in token:
-                # Other modifiers, including exp, do not count toward the 10-term limit.
                 continue
 
             mechanism = re.split(r"[:/]", low, maxsplit=1)[0]
@@ -171,25 +254,29 @@ class DnsMailMixin:
                 count += 1
                 breakdown.append(token)
                 if mechanism == "include":
-                    target = token.split(":", 1)[1].strip().rstrip(".") if ":" in token else ""
+                    target = (
+                        token.split(":", 1)[1].strip().rstrip(".")
+                        if ":" in token
+                        else ""
+                    )
                     if target and "%" not in target and count <= 20:
-                        child_records = [x for x in self._txt_records(target) if x.lower().startswith("v=spf1")]
-                        if len(child_records) == 1:
-                            child = self._estimate_spf_dns_lookups(target, child_records[0], visited, depth + 1)
-                            count += child["count"]
-                            breakdown.extend([f"  {x}" for x in child["breakdown"]])
-                            notes.extend(child["notes"])
-                        elif len(child_records) == 0:
-                            notes.append(f"include target {target} has no SPF record")
-                        else:
-                            notes.append(f"include target {target} has multiple SPF records")
+                        child_spf(target, "include")
                     elif target and "%" in target:
-                        notes.append(f"cannot recursively evaluate macro-based include target: {target}")
+                        notes.append(
+                            f"cannot recursively evaluate macro-based include target: {target}"
+                        )
                 if count > 20:
-                    notes.append("lookup expansion stopped after clearly exceeding the SPF limit")
+                    notes.append(
+                        "lookup expansion stopped after clearly exceeding the SPF limit"
+                    )
                     break
 
-        return {"count": count, "breakdown": breakdown, "notes": notes}
+        return {
+            "count": count,
+            "breakdown": breakdown,
+            "notes": notes,
+            "complete": complete,
+        }
 
     @staticmethod
     def _parse_dmarc_record(record: str) -> dict[str, Any]:
@@ -254,15 +341,23 @@ class DnsMailMixin:
         # Registration/domain and mail checks always use the registered root domain.
         # Web checks continue to use the exact target host supplied by the user.
         root = {}
+        root_results: dict[str, DnsQueryResult] = {}
         for rt in COMMON_DNS_TYPES:
-            root[rt] = self.dns_query(self.root_domain, rt)
-        root["DS"] = self.dns_query(self.root_domain, "DS")
+            result = self.dns_query_result(self.root_domain, rt)
+            root_results[rt] = result
+            root[rt] = list(result.records)
+        ds_result = self.dns_query_result(self.root_domain, "DS")
+        root_results["DS"] = ds_result
+        root["DS"] = list(ds_result.records)
         self.dns_records[self.root_domain] = root
 
+        target_results: dict[str, DnsQueryResult] = {}
         if self.target_domain != self.root_domain:
             target = {}
             for rt in COMMON_DNS_TYPES:
-                target[rt] = self.dns_query(self.target_domain, rt)
+                result = self.dns_query_result(self.target_domain, rt)
+                target_results[rt] = result
+                target[rt] = list(result.records)
             self.dns_records[self.target_domain] = target
 
         ds = root["DS"]
@@ -270,39 +365,81 @@ class DnsMailMixin:
         if ds or rdap_signed is True:
             self.add_check("Domain", "DNSSEC", "pass",
                            f"Wykryto delegację DNSSEC dla {self.root_domain}.", 7, 7)
+        elif ds_result.failed:
+            self.add_check(
+                "Domain", "DNSSEC", "unknown",
+                f"Nie można wiarygodnie ocenić DNSSEC: zapytanie DS zakończyło się "
+                f"błędem ({self._dns_unavailable_message(ds_result)}).",
+                7, 0, False
+            )
         else:
             self.add_check("Domain", "DNSSEC", "warn",
                            f"Nie wykryto delegacji DNSSEC dla {self.root_domain}.", 7, 0)
 
         # CAA can exist at the exact host; if absent, CA processing walks upward.
-        target_caa = self.dns_query(self.target_domain, "CAA") if self.target_domain != self.root_domain else []
+        root_caa_result = root_results["CAA"]
+        target_caa_result = (
+            target_results.get("CAA")
+            if self.target_domain != self.root_domain
+            else None
+        )
+        target_caa = list(target_caa_result.records) if target_caa_result else []
         caa = target_caa or root.get("CAA", [])
         self.rdap["caa_source"] = self.target_domain if target_caa else self.root_domain
         if caa:
             self.add_check("Domain", "CAA", "pass",
                            f"Wykryto {len(caa)} rekord(y) CAA (źródło: {self.rdap['caa_source']}).", 3, 3)
+        elif root_caa_result.failed or (target_caa_result and target_caa_result.failed):
+            failed = target_caa_result if target_caa_result and target_caa_result.failed else root_caa_result
+            self.add_check(
+                "Domain", "CAA", "unknown",
+                f"Nie można wiarygodnie potwierdzić braku CAA: zapytanie DNS zakończyło się "
+                f"błędem ({self._dns_unavailable_message(failed)}).",
+                3, 0, False
+            )
         else:
             self.add_check("Domain", "CAA", "warn",
                            "Brak rekordu CAA na hoście docelowym i domenie bazowej.", 3, 0)
 
         # MAIL SECURITY: always root domain, even if the website is on a subdomain.
         self.mail["domain"] = self.root_domain
+        mx_result = root_results["MX"]
         mx = root.get("MX", [])
         self.mail["mx"] = mx
         if mx:
             self.add_check("Mail", "MX", "pass",
                            f"Wykryto {len(mx)} rekord(y) MX dla {self.root_domain}.", 2, 2)
+        elif mx_result.failed:
+            self.add_check(
+                "Mail", "MX", "unknown",
+                f"Nie można ocenić rekordów MX z powodu błędu DNS "
+                f"({self._dns_unavailable_message(mx_result)}).",
+                2, 0, False
+            )
         else:
             self.add_check("Mail", "MX", "info",
                            f"Brak rekordów MX dla {self.root_domain}. Jeśli domena nie obsługuje poczty, może to być zamierzone.",
                            2, 0, False)
 
+        txt_result = root_results["TXT"]
         txt = [self._normalize_txt_record(x) for x in root.get("TXT", [])]
         spf = [x for x in txt if x.lower().startswith("v=spf1")]
         self.mail["spf"] = spf
         self.mail["spf_analysis"] = {"record_count": len(spf)}
 
-        if not spf:
+        if txt_result.failed:
+            self.mail["spf_analysis"]["dns_evidence"] = txt_result.state.value
+            self.add_check(
+                "Mail", "SPF", "unknown",
+                f"Nie można wiarygodnie ocenić SPF: zapytanie TXT zakończyło się "
+                f"błędem ({self._dns_unavailable_message(txt_result)}).",
+                8, 0, False
+            )
+            self.add_check("Mail", "SPF syntax", "unknown",
+                           "Nie można ocenić składni SPF bez wiarygodnego wyniku DNS.", 0, 0, False)
+            self.add_check("Mail", "SPF DNS lookup budget", "unknown",
+                           "Nie można ocenić limitu zapytań SPF bez wiarygodnego wyniku DNS.", 0, 0, False)
+        elif not spf:
             self.add_check("Mail", "SPF", "fail",
                            f"Nie wykryto rekordu SPF dla {self.root_domain}.", 8, 0)
             self.add_check("Mail", "SPF syntax", "unknown",
@@ -332,7 +469,15 @@ class DnsMailMixin:
                                "Wykryto problemy składni SPF: " + "; ".join(syntax["errors"][:4]), 2, 0)
 
             lookup_count = lookups["count"]
-            if lookup_count > 10:
+            lookup_complete = lookups.get("complete", True)
+            if not lookup_complete:
+                self.add_check(
+                    "Mail", "SPF DNS lookup budget", "unknown",
+                    "Nie można wiarygodnie ocenić pełnego budżetu SPF, ponieważ co najmniej jedno "
+                    "zagnieżdżone zapytanie DNS nie zakończyło się wiarygodnym wynikiem.",
+                    3, 0, False
+                )
+            elif lookup_count > 10:
                 self.add_check("Mail", "SPF DNS lookup budget", "fail",
                                f"Szacowany najgorszy przypadek używa {lookup_count} mechanizmów wymagających DNS; limit SPF wynosi 10.", 3, 0)
             elif lookup_count == 10:
@@ -346,7 +491,7 @@ class DnsMailMixin:
             if "+all" in spf_lower:
                 self.add_check("Mail", "SPF", "fail",
                                f"SPF dla {self.root_domain} zawiera +all, co praktycznie zezwala każdemu nadawcy.", 8, 0)
-            elif not syntax["valid"] or lookup_count > 10:
+            elif not syntax["valid"] or (lookup_complete and lookup_count > 10):
                 self.add_check("Mail", "SPF", "fail",
                                f"SPF dla {self.root_domain} istnieje, ale ma błąd składni lub przekracza limit zapytań DNS.", 8, 0)
             elif re.search(r"(?:^|\s)-all(?:\s|$)", spf_lower):
@@ -362,11 +507,22 @@ class DnsMailMixin:
                 self.add_check("Mail", "SPF", "warn",
                                f"SPF dla {self.root_domain} obecny, ale końcowa polityka wymaga ręcznej oceny.", 8, 4)
 
-        dmarc_txt = [self._normalize_txt_record(x) for x in self.dns_query(f"_dmarc.{self.root_domain}", "TXT")]
+        dmarc_result = self.dns_query_result(f"_dmarc.{self.root_domain}", "TXT")
+        dmarc_txt = [self._normalize_txt_record(x) for x in dmarc_result.records]
         dmarc = [x for x in dmarc_txt if re.search(r"\bv\s*=\s*dmarc1\b", x, flags=re.I)]
         self.mail["dmarc"] = dmarc
         self.mail["dmarc_analysis"] = {"record_count": len(dmarc)}
-        if not dmarc:
+        if dmarc_result.failed:
+            self.mail["dmarc_analysis"]["dns_evidence"] = dmarc_result.state.value
+            self.add_check(
+                "Mail", "DMARC", "unknown",
+                f"Nie można wiarygodnie ocenić DMARC: zapytanie DNS zakończyło się "
+                f"błędem ({self._dns_unavailable_message(dmarc_result)}).",
+                12, 0, False
+            )
+            self.add_check("Mail", "DMARC syntax", "unknown",
+                           "Nie można ocenić składni DMARC bez wiarygodnego wyniku DNS.", 0, 0, False)
+        elif not dmarc:
             self.add_check("Mail", "DMARC", "fail",
                            f"Nie wykryto rekordu DMARC dla {self.root_domain}.", 12, 0)
             self.add_check("Mail", "DMARC syntax", "unknown",
@@ -419,15 +575,26 @@ class DnsMailMixin:
                                0, 0, False)
 
         found_dkim = {}
+        dkim_failures: list[DnsQueryResult] = []
         for selector in COMMON_DKIM_SELECTORS:
-            rows = self.dns_query(f"{selector}._domainkey.{self.root_domain}", "TXT")
-            rows = [x for x in rows if "v=dkim1" in x.lower() or "p=" in x.lower()]
+            result = self.dns_query_result(f"{selector}._domainkey.{self.root_domain}", "TXT")
+            if result.failed:
+                dkim_failures.append(result)
+            rows = [x for x in result.records if "v=dkim1" in x.lower() or "p=" in x.lower()]
             if rows:
                 found_dkim[selector] = rows
         self.mail["dkim_common_selectors"] = found_dkim
         if found_dkim:
             self.add_check("Mail", "DKIM", "pass",
                            "Wykryto DKIM dla selektorów: " + ", ".join(sorted(found_dkim)), 5, 5)
+        elif dkim_failures:
+            self.add_check(
+                "Mail", "DKIM", "unknown",
+                "Nie można zakończyć konserwatywnej próby popularnych selektorów DKIM, "
+                "ponieważ część zapytań DNS zakończyła się błędem. "
+                "Brak wyniku nadal nie oznacza braku DKIM.",
+                5, 0, False
+            )
         else:
             self.add_check(
                 "Mail", "DKIM", "unknown",
@@ -436,7 +603,8 @@ class DnsMailMixin:
                 5, 0, False
             )
 
-        mta_sts_dns = self.dns_query(f"_mta-sts.{self.root_domain}", "TXT")
+        mta_sts_result = self.dns_query_result(f"_mta-sts.{self.root_domain}", "TXT")
+        mta_sts_dns = list(mta_sts_result.records)
         mta_policy = None
         try:
             r = self.session.get(
@@ -451,6 +619,13 @@ class DnsMailMixin:
         if mta_sts_dns and mta_policy:
             self.add_check("Mail", "MTA-STS", "pass",
                            "Wykryto rekord MTA-STS i dostępną politykę HTTPS.", 3, 3)
+        elif mta_sts_result.failed:
+            self.add_check(
+                "Mail", "MTA-STS", "unknown",
+                f"Nie można wiarygodnie ocenić MTA-STS z powodu błędu DNS "
+                f"({self._dns_unavailable_message(mta_sts_result)}).",
+                3, 0, False
+            )
         elif mta_sts_dns or mta_policy:
             self.add_check("Mail", "MTA-STS", "warn",
                            "MTA-STS wygląda na częściowo skonfigurowane.", 3, 1)
@@ -458,11 +633,18 @@ class DnsMailMixin:
             self.add_check("Mail", "MTA-STS", "info",
                            f"Nie wykryto MTA-STS dla {self.root_domain}.", 3, 0)
 
-        tls_rpt = self.dns_query(f"_smtp._tls.{self.root_domain}", "TXT")
-        tls_rpt = [x for x in tls_rpt if "v=tlsrptv1" in x.lower()]
+        tls_rpt_result = self.dns_query_result(f"_smtp._tls.{self.root_domain}", "TXT")
+        tls_rpt = [x for x in tls_rpt_result.records if "v=tlsrptv1" in x.lower()]
         self.mail["tls_rpt"] = tls_rpt
         if tls_rpt:
             self.add_check("Mail", "TLS-RPT", "pass", "Wykryto rekord TLS-RPT.", 2, 2)
+        elif tls_rpt_result.failed:
+            self.add_check(
+                "Mail", "TLS-RPT", "unknown",
+                f"Nie można wiarygodnie ocenić TLS-RPT z powodu błędu DNS "
+                f"({self._dns_unavailable_message(tls_rpt_result)}).",
+                2, 0, False
+            )
         else:
             self.add_check("Mail", "TLS-RPT", "info",
                            f"Nie wykryto TLS-RPT dla {self.root_domain}.", 2, 0)
