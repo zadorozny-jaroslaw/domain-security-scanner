@@ -1,6 +1,6 @@
 # Domain Security Scanner
 
-**Version 1.0.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
+**Version 1.0.1** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
 
 > **Source-available / non-commercial license.** This project is free for personal, educational, research, evaluation, testing, and internal non-commercial use. Commercial use requires separate written permission from Jarosław Zadorożny. See [LICENSE](LICENSE).
 >
@@ -240,6 +240,33 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
 - Passive CMS detection can miss intentionally hidden or heavily proxied platforms.
+
+## Project structure
+
+The scanner is organized as a Python package while keeping `domain_security_scan.py` as the backward-compatible command-line entry point. The package split is organizational only: the scan flow, checks, scoring behavior, JSON schema, PDF output, and CLI arguments remain unchanged.
+
+```text
+domain_security_scan.py              # compatibility CLI entry point
+domain_security_scanner/
+├── __init__.py                       # public package API
+├── version.py                        # scanner version
+├── constants.py                      # shared scanner constants
+├── models.py                         # Check result model
+├── utils.py                          # domain/date helper functions
+├── base.py                           # shared Scanner state
+├── rdap.py                           # RDAP/domain checks
+├── dns_mail.py                       # DNS and mail-security checks
+├── inventory.py                      # CT discovery, crawl, DNS inventory
+├── web_tls.py                        # HTTP/TLS/cookie/header checks
+├── cms.py                            # passive CMS detection/currency checks
+├── scanner.py                        # scan orchestration and scoring
+├── cli.py                            # argument parsing and output handling
+└── reporting/
+    ├── __init__.py
+    └── pdf.py                        # PDF rendering
+```
+
+This layout is intended to make later changes easier to isolate. For example, report rendering can evolve without mixing PDF code into DNS or TLS checks, while the top-level script remains compatible with the existing documented commands.
 
 ## Contributing
 
