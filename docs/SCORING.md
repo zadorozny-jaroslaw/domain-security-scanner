@@ -29,3 +29,7 @@ The current labels are intentionally broad:
 - **0-59** - Priority remediation
 
 A lower score should be used to prioritize review, not as evidence that the organization has been breached. A high score likewise does not prove that internal systems, identities, endpoints, backups, or cloud tenants are secure.
+## Mail applicability
+
+A valid RFC 7505 Null MX is treated as an intentional declaration that the domain does not accept inbound mail. The MX check can therefore pass on a valid Null MX, while receiver-side controls such as MTA-STS and TLS-RPT are excluded from the weighted denominator as not applicable. SPF and DMARC remain independently evaluated because they concern sender identity and anti-spoofing posture.
+

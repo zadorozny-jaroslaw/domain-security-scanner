@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class StandardReference:
+    """Stable metadata for a standards-based scanner check."""
+
+    key: str
+    number: int
+    title: str
+    url: str
+    scope: str
+
+    @property
+    def label(self) -> str:
+        return f"RFC {self.number}"
+
+
+RFC_7505 = StandardReference(
+    key="RFC7505",
+    number=7505,
+    title='A "Null MX" No Service Resource Record for Domains That Accept No Mail',
+    url="https://www.rfc-editor.org/info/rfc7505",
+    scope="Mail receiving / Null MX",
+)
+
+RFC_8460 = StandardReference(
+    key="RFC8460",
+    number=8460,
+    title="SMTP TLS Reporting",
+    url="https://www.rfc-editor.org/info/rfc8460",
+    scope="Mail receiving / TLS-RPT",
+)
+
+RFC_8461 = StandardReference(
+    key="RFC8461",
+    number=8461,
+    title="SMTP MTA Strict Transport Security (MTA-STS)",
+    url="https://www.rfc-editor.org/info/rfc8461",
+    scope="Mail receiving / MTA-STS",
+)
+
+
+STANDARD_REFERENCES: dict[str, StandardReference] = {
+    RFC_7505.key: RFC_7505,
+    RFC_8460.key: RFC_8460,
+    RFC_8461.key: RFC_8461,
+}
+
+
+def get_standard(key: str) -> StandardReference:
+    """Return a registered standard by stable key."""
+
+    return STANDARD_REFERENCES[key.upper()]

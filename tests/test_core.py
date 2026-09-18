@@ -4,7 +4,7 @@ import dns.exception
 import dns.resolver
 
 import domain_security_scan as scanner
-from domain_security_scanner.models import DnsQueryState
+from domain_security_scanner.models import DnsQueryResult, DnsQueryState
 
 
 class CoreHelpersTest(unittest.TestCase):
@@ -215,6 +215,63 @@ class DnsEvidenceTest(unittest.TestCase):
         self.assertEqual(result["count"], 1)
         self.assertFalse(result["complete"])
         self.assertTrue(any("could not be resolved" in note for note in result["notes"]))
+
+
+class HostInventoryTest(unittest.TestCase):
+    def test_host_inventory_separates_live_historical_unknown_and_unassessed(self):
+        instance = scanner.Scanner("example.com")
+        instance.subdomains = {
+            "example.com",
+            "live.example.com",
+            "old.example.com",
+            "empty.example.com",
+            "unknown.example.com",
+            "skipped.example.com",
+        }
+        instance.ct_subdomains = {"old.example.com", "empty.example.com"}
+        instance.dns_records = {
+            "example.com": {"A": ["192.0.2.10"]},
+            "live.example.com": {"CNAME": ["example.com."]},
+            "old.example.com": {rtype: [] for rtype in scanner.COMMON_DNS_TYPES},
+            "empty.example.com": {rtype: [] for rtype in scanner.COMMON_DNS_TYPES},
+            "unknown.example.com": {rtype: [] for rtype in scanner.COMMON_DNS_TYPES},
+        }
+        instance.dns_query_cache[("old.example.com", "A")] = DnsQueryResult(
+            "old.example.com", "A", DnsQueryState.NXDOMAIN
+        )
+        instance.dns_query_cache[("empty.example.com", "A")] = DnsQueryResult(
+            "empty.example.com", "A", DnsQueryState.NO_ANSWER
+        )
+        instance.dns_query_cache[("unknown.example.com", "A")] = DnsQueryResult(
+            "unknown.example.com", "A", DnsQueryState.TIMEOUT, error="timeout"
+        )
+
+        inventory = instance.host_inventory()
+
+        self.assertEqual(inventory["live"], ["example.com", "live.example.com"])
+        self.assertEqual(inventory["historical"], ["old.example.com"])
+        self.assertEqual(inventory["unresolved"], ["empty.example.com"])
+        self.assertEqual(inventory["dns_unknown"], ["unknown.example.com"])
+        self.assertEqual(inventory["not_assessed"], ["skipped.example.com"])
+        self.assertEqual(instance.to_dict()["host_inventory"], inventory)
+
+    def test_ct_discovery_tracks_historical_source(self):
+        instance = scanner.Scanner("example.com")
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return [{"name_value": "old.example.com\n*.wild.example.com"}]
+
+        instance.session.get = lambda *args, **kwargs: Response()
+        instance.discover_ct_subdomains()
+
+        self.assertIn("old.example.com", instance.subdomains)
+        self.assertIn("wild.example.com", instance.subdomains)
+        self.assertIn("old.example.com", instance.ct_subdomains)
+        self.assertIn("wild.example.com", instance.ct_subdomains)
 
 
 if __name__ == "__main__":

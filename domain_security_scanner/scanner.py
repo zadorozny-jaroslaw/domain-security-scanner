@@ -63,11 +63,13 @@ class Scanner(RdapMixin, DnsMailMixin, InventoryMixin, WebTlsMixin, CmsMixin, Ba
             "tls": self.tls,
             "http": self.http,
             "subdomains": sorted(self.subdomains),
+            "host_inventory": self.host_inventory(),
             "emails": sorted(self.emails),
             "dns_records": self.dns_records,
             "limitations": [
                 "To jest zewnętrzny, niskoinwazyjny health check, a nie pełny pentest.",
                 "Brak wyniku DKIM dla popularnych selektorów nie oznacza braku DKIM.",
+                "Certificate Transparency jest historyczne; nazwa jest oznaczana jako historyczna tylko przy aktualnym NXDOMAIN, a błędy resolvera pozostają jako stan nieznany.",
                 "DNSSEC jest wykrywany na podstawie delegacji/DS/RDAP; skrypt nie wykonuje pełnej walidacji kryptograficznej łańcucha.",
                 "Dla .pl brak informacji o Registry Lock w RDAP nie oznacza, że blokady nie ma.",
                 "Wynik nie obejmuje bezpieczeństwa kont, MFA, endpointów, backupu, uprawnień ani konfiguracji wewnętrznej.",

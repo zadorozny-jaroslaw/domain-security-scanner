@@ -75,6 +75,34 @@ def _score_palette(score: int):
         return colors.HexColor("#FEF3C7"), colors.HexColor("#92400E"), "Needs improvement"
     return colors.HexColor("#FEE2E2"), colors.HexColor("#991B1B"), "Priority remediation"
 
+def _host_inventory_groups(report: dict[str, Any]) -> dict[str, list[str]]:
+    """Return host groups for reporting, with a fallback for older JSON reports."""
+    inventory = report.get("host_inventory")
+    keys = ("live", "historical", "unresolved", "dns_unknown", "not_assessed")
+    if isinstance(inventory, dict):
+        return {key: sorted(set(inventory.get(key, []) or [])) for key in keys}
+
+    # Backward-compatible fallback: old reports do not contain enough evidence to
+    # call an empty hostname historical, so place it in the neutral unresolved group.
+    dns_records = report.get("dns_records", {}) or {}
+    discovered = set(report.get("subdomains", []) or [])
+    live = sorted(
+        host for host, records in dns_records.items()
+        if any(values for values in (records or {}).values())
+    )
+    unresolved = sorted(
+        host for host, records in dns_records.items()
+        if not any(values for values in (records or {}).values())
+    )
+    not_assessed = sorted(discovered - set(dns_records))
+    return {
+        "live": live,
+        "historical": [],
+        "unresolved": unresolved,
+        "dns_unknown": [],
+        "not_assessed": not_assessed,
+    }
+
 def _recommendation(check: dict[str, Any]) -> str:
     name = str(check.get("name", "")).lower()
     status = str(check.get("status", "unknown"))
@@ -640,21 +668,59 @@ def generate_pdf(report: dict[str, Any], output: Path):
 
     story.append(PageBreak())
     story.append(Paragraph("External inventory", styles["Section"]))
+    inventory = _host_inventory_groups(report)
+    discovered_count = len(report.get("subdomains", []))
     story.append(Paragraph(
-        f"<b>Subdomains / hosts discovered:</b> {len(report.get('subdomains', []))}",
+        f"<b>Subdomains / hosts discovered:</b> {discovered_count} &nbsp; "
+        f"<b>current DNS:</b> {len(inventory['live'])} &nbsp; "
+        f"<b>historical:</b> {len(inventory['historical'])}",
         styles["BodyText"]
     ))
-    host_rows = [["Host"]] + [[host] for host in report.get("subdomains", [])]
-    ht = Table(host_rows, colWidths=[178*mm], repeatRows=1)
-    ht.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0F172A")),
-        ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("FONTNAME",(0,0),(-1,0),bold_font),
-        ("FONTNAME",(0,1),(-1,-1),regular_font),
-        ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
-        ("FONTSIZE",(0,0),(-1,-1),7)
-    ]))
-    story.append(ht)
+
+    def append_host_group(title: str, hosts: list[str], note: str | None = None):
+        if not hosts:
+            return
+        story.append(Paragraph(title, styles["Heading3"]))
+        if note:
+            story.append(Paragraph(note, styles["Tiny"]))
+        host_rows = [["Host"]] + [[Paragraph(p(host), styles["Small"])] for host in hosts]
+        ht = Table(host_rows, colWidths=[178*mm], repeatRows=1)
+        ht.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0F172A")),
+            ("TEXTCOLOR",(0,0),(-1,0),colors.white),
+            ("FONTNAME",(0,0),(-1,0),bold_font),
+            ("FONTNAME",(0,1),(-1,-1),regular_font),
+            ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
+            ("FONTSIZE",(0,0),(-1,-1),7),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ]))
+        story.append(ht)
+
+    append_host_group(
+        f"Current DNS hosts ({len(inventory['live'])})",
+        inventory["live"],
+        "At least one current record was returned from the low-impact DNS inventory.",
+    )
+    append_host_group(
+        f"Historical CT hostnames ({len(inventory['historical'])})",
+        inventory["historical"],
+        "Previously observed in Certificate Transparency, but current DNS returned NXDOMAIN. These names are kept as historical evidence and are not shown in the live DNS appendix.",
+    )
+    append_host_group(
+        f"Currently unresolved hostnames ({len(inventory['unresolved'])})",
+        inventory["unresolved"],
+        "No current A/AAAA/CNAME/MX/TXT/NS/CAA records were returned, but the evidence was not strong enough to classify the name as historical.",
+    )
+    append_host_group(
+        f"DNS status unknown ({len(inventory['dns_unknown'])})",
+        inventory["dns_unknown"],
+        "One or more DNS queries failed (for example timeout or SERVFAIL), so these names are not classified as inactive or historical.",
+    )
+    append_host_group(
+        f"Discovered but not DNS-assessed ({len(inventory['not_assessed'])})",
+        inventory["not_assessed"],
+        "These names were discovered after the configured DNS host limit was reached.",
+    )
 
     story.append(Spacer(1, 8))
     story.append(Paragraph(
@@ -666,15 +732,25 @@ def generate_pdf(report: dict[str, Any], output: Path):
     else:
         story.append(Paragraph("None found.", styles["Small"]))
 
-    story.append(Paragraph("DNS appendix", styles["Section"]))
-    for host, records in report.get("dns_records", {}).items():
+    story.append(Paragraph("DNS appendix - current records", styles["Section"]))
+    live_hosts = set(inventory["live"])
+    dns_records = report.get("dns_records", {}) or {}
+    ordered_live_hosts = [host for host in dns_records if host in live_hosts]
+    ordered_live_hosts.extend(sorted(live_hosts - set(ordered_live_hosts)))
+
+    if not ordered_live_hosts:
+        story.append(Paragraph("No hosts with current DNS records were confirmed.", styles["Small"]))
+
+    for host in ordered_live_hosts:
+        records = dns_records.get(host, {}) or {}
         block = [Paragraph(f"<b>{p(host)}</b>", styles["BodyText"])]
         dns_rows = [["Type", "Value"]]
         for rtype, values in records.items():
             if values:
                 dns_rows.append([rtype, Paragraph("<br/>".join(p(v) for v in values), styles["Small"])])
+        # A host is only placed in this appendix when current DNS data exists.
         if len(dns_rows) == 1:
-            dns_rows.append(["-", "No records collected"])
+            continue
         dt = Table(dns_rows, colWidths=[22*mm, 156*mm], repeatRows=1)
         dt.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E2E8F0")),

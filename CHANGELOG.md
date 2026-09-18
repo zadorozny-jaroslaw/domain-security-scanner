@@ -6,12 +6,20 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add RFC 7505 Null MX parsing and validation, including detection of invalid mixed Null MX/ordinary MX configurations.
+- Add a small internal standards reference registry for standards-backed checks.
+- Add RFC 8461 MTA-STS validation for the DNS policy indicator, HTTPS response, policy syntax, modes, `max_age`, and MX-pattern coverage.
+- Add RFC 8460 TLS-RPT policy validation, including required `rua` destinations, URI scheme validation, multiple-policy detection, and extension-field handling.
+
 ### Changed
 
 - Preserve DNS lookup evidence states so timeouts, SERVFAIL responses and resolver errors are not treated as missing records.
 - Cache DNS query results during a scan to avoid repeating identical lookups.
 - Mark DNS-dependent checks as `UNKNOWN` and exclude them from scoring when required DNS evidence is unavailable.
 - Track incomplete nested SPF DNS evidence so lookup-budget checks do not report a confident pass after resolver failures.
+- Split discovered-host reporting into current DNS, historical CT/NXDOMAIN, unresolved, DNS-unknown, and not-assessed groups; keep the DNS appendix focused on hosts with current records.
 
 ## [1.0.1] - 2026-09-17
 

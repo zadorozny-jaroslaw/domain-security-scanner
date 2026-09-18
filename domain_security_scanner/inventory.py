@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from .constants import COMMON_DNS_TYPES, EMAIL_RE, TIMEOUT
+from .models import DnsQueryState
 from .utils import is_in_scope_host
 
 
@@ -29,6 +30,7 @@ class InventoryMixin:
                     name = name.strip().lower().lstrip("*.")
                     if is_in_scope_host(name, self.root_domain):
                         self.subdomains.add(name)
+                        self.ct_subdomains.add(name)
         except Exception:
             pass
 
@@ -102,3 +104,55 @@ class InventoryMixin:
             for rt in COMMON_DNS_TYPES:
                 rows[rt] = self.dns_query(host, rt)
             self.dns_records[host] = rows
+
+    def host_inventory(self) -> dict[str, list[str]]:
+        """Classify discovered hosts using current DNS evidence.
+
+        Certificate Transparency is historical by design. A CT-only name is only
+        labelled historical when current DNS returned NXDOMAIN conclusively. Names
+        with no common records but without NXDOMAIN stay in a separate unresolved
+        bucket, and resolver failures remain unknown rather than being called dead.
+        """
+        live: list[str] = []
+        historical: list[str] = []
+        unresolved: list[str] = []
+        dns_unknown: list[str] = []
+        not_assessed: list[str] = []
+
+        for host in sorted(self.subdomains):
+            records = self.dns_records.get(host)
+            if records is None:
+                not_assessed.append(host)
+                continue
+
+            if any(values for values in records.values()):
+                live.append(host)
+                continue
+
+            results = [
+                self.dns_query_cache.get((host.lower().rstrip("."), rtype))
+                for rtype in COMMON_DNS_TYPES
+            ]
+            results = [result for result in results if result is not None]
+
+            if any(result.failed for result in results):
+                dns_unknown.append(host)
+                continue
+
+            is_ct_history = (
+                host in self.ct_subdomains
+                and host not in {self.target_domain, self.root_domain}
+                and any(result.state == DnsQueryState.NXDOMAIN for result in results)
+            )
+            if is_ct_history:
+                historical.append(host)
+            else:
+                unresolved.append(host)
+
+        return {
+            "live": live,
+            "historical": historical,
+            "unresolved": unresolved,
+            "dns_unknown": dns_unknown,
+            "not_assessed": not_assessed,
+        }
