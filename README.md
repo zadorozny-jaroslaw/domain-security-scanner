@@ -267,6 +267,10 @@ domain_security_scanner/
 ├── cms.py                            # passive CMS detection/currency checks
 ├── scanner.py                        # scan orchestration and scoring
 ├── cli.py                            # argument parsing and output handling
+├── standards/
+│   ├── __init__.py                   # standards package exports
+│   ├── registry.py                   # RFC metadata/reference registry
+│   └── mail.py                       # mail-standard parsing/validation helpers
 └── reporting/
     ├── __init__.py
     └── pdf.py                        # PDF rendering
@@ -277,6 +281,8 @@ This layout is intended to make later changes easier to isolate. Shared result m
 ## Contributing
 
 Contributions are welcome when they preserve the project's low-impact, evidence-based posture-check scope.
+
+Development work normally starts from `develop`, returns to `develop` through a focused pull request, and is promoted to `main` only through a release pull request. See [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for the branch and release workflow.
 
 Before opening a large pull request, read [CONTRIBUTING.md](CONTRIBUTING.md). In particular, new findings should minimize false positives, explain why they matter, and avoid turning the default scanner into an exploitation framework.
 
@@ -292,7 +298,7 @@ The project uses semantic versioning:
 - `1.x.0` - compatible new checks/features
 - `2.0.0` - breaking behavior or interface changes
 
-See [CHANGELOG.md](CHANGELOG.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+See [CHANGELOG.md](CHANGELOG.md), [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), and [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md).
 
 ## License
 

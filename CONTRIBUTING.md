@@ -35,6 +35,24 @@ python -m unittest discover -s tests -v
 python domain_security_scan.py --version
 ```
 
+## Branching workflow
+
+Normal feature and bug-fix work should branch from `develop` and return to `develop` through a pull request. The `main` branch is reserved for released code and is updated from `develop` through a release pull request.
+
+Use short-lived branch names such as:
+
+```text
+feature/<topic>
+fix/<topic>
+docs/<topic>
+```
+
+The repository uses squash merging for pull requests. After a squash-merged release pull request, the maintainer realigns `develop` with the released `main` before new feature work begins.
+
+Small maintainer-only documentation or release-metadata changes that do not alter scanner behavior may be committed directly to `develop`.
+
+See [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for the complete workflow and release synchronization steps.
+
 ## Pull-request expectations
 
 Keep changes focused. A new check should:
