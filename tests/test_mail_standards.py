@@ -92,3 +92,108 @@ class NullMxRfc7505Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code=200, text="", headers=None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
+
+
+class MtaStsRfc8461Test(unittest.TestCase):
+    def test_mta_sts_txt_requires_id(self):
+        from domain_security_scanner.standards import analyze_mta_sts_txt
+
+        analysis = analyze_mta_sts_txt(["v=STSv1; foo=bar"])
+        self.assertTrue(analysis["configured"])
+        self.assertFalse(analysis["valid"])
+        self.assertTrue(any("id" in error for error in analysis["errors"]))
+
+    def test_mta_sts_txt_accepts_rfc_whitespace_before_semicolon(self):
+        from domain_security_scanner.standards import analyze_mta_sts_txt
+
+        analysis = analyze_mta_sts_txt(["v=STSv1 ; id=abc123"])
+        self.assertTrue(analysis["valid"])
+        self.assertEqual(analysis["id"], "abc123")
+
+    def test_mta_sts_txt_rejects_multiple_usable_records(self):
+        from domain_security_scanner.standards import analyze_mta_sts_txt
+
+        analysis = analyze_mta_sts_txt([
+            "v=STSv1; id=one",
+            "v=STSv1; id=two",
+        ])
+        self.assertFalse(analysis["valid"])
+        self.assertEqual(analysis["candidate_count"], 2)
+
+    def test_mta_sts_policy_validates_required_fields(self):
+        from domain_security_scanner.standards import parse_mta_sts_policy
+
+        policy = parse_mta_sts_policy(
+            "version: STSv1\n"
+            "mode: enforce\n"
+            "mx: mail.example.com\n"
+            "mx: *.backup.example.com\n"
+            "max_age: 604800\n"
+        )
+        self.assertTrue(policy["valid"])
+        self.assertEqual(policy["mode"], "enforce")
+        self.assertEqual(policy["max_age"], 604800)
+
+    def test_mta_sts_policy_rejects_excessive_max_age(self):
+        from domain_security_scanner.standards import parse_mta_sts_policy
+
+        policy = parse_mta_sts_policy(
+            "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 31557601\n"
+        )
+        self.assertFalse(policy["valid"])
+        self.assertTrue(any("31557600" in error for error in policy["errors"]))
+
+    def test_mta_sts_wildcard_matches_only_one_leftmost_label(self):
+        from domain_security_scanner.standards import mta_sts_mx_matches
+
+        self.assertTrue(mta_sts_mx_matches("mx1.example.com", "*.example.com"))
+        self.assertFalse(mta_sts_mx_matches("example.com", "*.example.com"))
+        self.assertFalse(mta_sts_mx_matches("a.b.example.com", "*.example.com"))
+
+    def test_scanner_validates_enforce_policy_and_does_not_follow_redirects(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("example.com", "MX"): _FakeAnswer(["10 mail.example.com."]),
+            ("_mta-sts.example.com", "TXT"): _FakeAnswer(['"v=STSv1; id=20260918"']),
+        })
+        calls = []
+
+        def fake_get(url, **kwargs):
+            calls.append((url, kwargs))
+            return _FakeHttpResponse(
+                200,
+                "version: STSv1\nmode: enforce\nmx: mail.example.com\nmax_age: 604800\n",
+                {"content-type": "text/plain; charset=utf-8"},
+            )
+
+        instance.session.get = fake_get
+        instance.collect_dns()
+
+        check = next(check for check in instance.checks if check.name == "MTA-STS")
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(check.earned, 3)
+        policy_call = next(call for call in calls if "mta-sts.example.com" in call[0])
+        self.assertIs(policy_call[1]["allow_redirects"], False)
+
+    def test_scanner_rejects_mta_sts_redirect(self):
+        instance = scanner.Scanner("example.com")
+        instance.resolver = _FakeResolver({
+            ("example.com", "MX"): _FakeAnswer(["10 mail.example.com."]),
+            ("_mta-sts.example.com", "TXT"): _FakeAnswer(['"v=STSv1; id=20260918"']),
+        })
+        instance.session.get = lambda *args, **kwargs: _FakeHttpResponse(
+            301, "", {"location": "https://other.example/mta-sts.txt"}
+        )
+
+        instance.collect_dns()
+
+        check = next(check for check in instance.checks if check.name == "MTA-STS")
+        self.assertEqual(check.status, "fail")
+        self.assertIn("przekierowaniami", check.message)

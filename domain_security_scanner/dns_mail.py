@@ -6,10 +6,18 @@ from typing import Any, Optional
 
 import dns.exception
 import dns.resolver
+import requests
 
 from .constants import COMMON_DKIM_SELECTORS, COMMON_DNS_TYPES, TIMEOUT
 from .models import DnsQueryResult, DnsQueryState
-from .standards import RFC_7505, analyze_mx_records
+from .standards import (
+    RFC_7505,
+    RFC_8461,
+    analyze_mta_sts_mx_coverage,
+    analyze_mta_sts_txt,
+    analyze_mx_records,
+    parse_mta_sts_policy,
+)
 
 
 class DnsMailMixin:
@@ -338,6 +346,148 @@ class DnsMailMixin:
             "fo": tags.get("fo", "0"),
         }
 
+    def _check_mta_sts(self, mx_analysis: dict[str, Any]) -> None:
+        """Validate the RFC 8461 DNS indicator and HTTPS policy."""
+        result = self.dns_query_result(f"_mta-sts.{self.root_domain}", "TXT")
+        records = [self._normalize_txt_record(value) for value in result.records]
+        txt_analysis = analyze_mta_sts_txt(records)
+        self.mail["mta_sts_dns"] = records
+        self.mail["mta_sts_analysis"] = {
+            "standard": RFC_8461.label,
+            "dns": txt_analysis,
+        }
+        self.mail["mta_sts_policy"] = None
+
+        if result.failed:
+            self.mail["mta_sts_analysis"]["dns_evidence"] = result.state.value
+            self.add_check(
+                "Mail", "MTA-STS", "unknown",
+                f"Nie można wiarygodnie ocenić MTA-STS z powodu błędu DNS "
+                f"({self._dns_unavailable_message(result)}).",
+                3, 0, False
+            )
+            return
+
+        if not txt_analysis["configured"]:
+            self.add_check(
+                "Mail", "MTA-STS", "info",
+                f"Nie wykryto polityki MTA-STS ({RFC_8461.label}) dla {self.root_domain}.",
+                3, 0
+            )
+            return
+
+        if not txt_analysis["valid"]:
+            self.add_check(
+                "Mail", "MTA-STS", "fail",
+                f"Rekord MTA-STS jest nieprawidłowy wg {RFC_8461.label}: "
+                + "; ".join(txt_analysis["errors"][:3]),
+                3, 0
+            )
+            return
+
+        policy_url = f"https://mta-sts.{self.root_domain}/.well-known/mta-sts.txt"
+        self.mail["mta_sts_analysis"]["policy_url"] = policy_url
+        try:
+            response = self.session.get(
+                policy_url,
+                timeout=TIMEOUT,
+                allow_redirects=False,
+            )
+        except requests.exceptions.SSLError as exc:
+            self.mail["mta_sts_analysis"]["fetch_error"] = f"TLS certificate validation failed: {exc}"
+            self.add_check(
+                "Mail", "MTA-STS", "fail",
+                f"Endpoint polityki MTA-STS nie przeszedł walidacji certyfikatu HTTPS ({RFC_8461.label}).",
+                3, 0
+            )
+            return
+        except Exception as exc:
+            self.mail["mta_sts_analysis"]["fetch_error"] = str(exc)
+            self.add_check(
+                "Mail", "MTA-STS", "unknown",
+                "Nie można wiarygodnie pobrać polityki MTA-STS przez HTTPS; "
+                "wynik może być przejściowym błędem sieciowym.",
+                3, 0, False
+            )
+            return
+
+        self.mail["mta_sts_analysis"]["http_status"] = response.status_code
+        content_type = response.headers.get("content-type", "")
+        self.mail["mta_sts_analysis"]["content_type"] = content_type
+
+        if response.status_code != 200:
+            if 300 <= response.status_code < 400:
+                message = (
+                    f"Endpoint MTA-STS zwrócił HTTP {response.status_code}; {RFC_8461.label} "
+                    "wymaga 200 i zabrania podążania za przekierowaniami."
+                )
+            else:
+                message = (
+                    f"Endpoint MTA-STS zwrócił HTTP {response.status_code}; "
+                    f"{RFC_8461.label} uznaje politykę HTTPS tylko dla odpowiedzi 200."
+                )
+            self.add_check("Mail", "MTA-STS", "fail", message, 3, 0)
+            return
+
+        policy_text = response.text[:65536]
+        self.mail["mta_sts_policy"] = policy_text
+        policy = parse_mta_sts_policy(policy_text)
+        mx_hosts = [
+            str(row["exchange"])
+            for row in mx_analysis.get("records", [])
+            if row.get("exchange") != "."
+        ]
+        coverage = analyze_mta_sts_mx_coverage(mx_hosts, policy.get("mx", []))
+        text_plain = content_type.split(";", 1)[0].strip().lower() == "text/plain"
+        self.mail["mta_sts_analysis"].update({
+            "policy": policy,
+            "mx_coverage": coverage,
+            "content_type_text_plain": text_plain,
+        })
+
+        if not policy["valid"]:
+            self.add_check(
+                "Mail", "MTA-STS", "fail",
+                f"Polityka MTA-STS jest nieprawidłowa wg {RFC_8461.label}: "
+                + "; ".join(policy["errors"][:3]),
+                3, 0
+            )
+            return
+
+        if policy["mode"] != "none" and not coverage["complete"]:
+            self.add_check(
+                "Mail", "MTA-STS", "fail",
+                "Polityka MTA-STS nie obejmuje wszystkich opublikowanych hostów MX: "
+                + ", ".join(coverage["unmatched"][:4]),
+                3, 0
+            )
+            return
+
+        if policy["mode"] == "none":
+            self.add_check(
+                "Mail", "MTA-STS", "warn",
+                f"Polityka MTA-STS jest poprawna składniowo, ale mode=none wyłącza egzekwowanie ({RFC_8461.label}).",
+                3, 1
+            )
+        elif policy["mode"] == "testing":
+            self.add_check(
+                "Mail", "MTA-STS", "warn",
+                f"MTA-STS jest poprawnie skonfigurowane w trybie testing ({RFC_8461.label}).",
+                3, 2
+            )
+        elif not text_plain:
+            self.add_check(
+                "Mail", "MTA-STS", "warn",
+                f"MTA-STS mode=enforce jest poprawne, ale endpoint nie zwraca zalecanego Content-Type text/plain ({RFC_8461.label}).",
+                3, 2
+            )
+        else:
+            self.add_check(
+                "Mail", "MTA-STS", "pass",
+                f"MTA-STS mode=enforce jest poprawnie opublikowane i obejmuje hosty MX ({RFC_8461.label}).",
+                3, 3
+            )
+
     def collect_dns(self):
         # Registration/domain and mail checks always use the registered root domain.
         # Web checks continue to use the exact target host supplied by the user.
@@ -642,35 +792,7 @@ class DnsMailMixin:
                 2, 0, False
             )
         else:
-            mta_sts_result = self.dns_query_result(f"_mta-sts.{self.root_domain}", "TXT")
-            mta_sts_dns = list(mta_sts_result.records)
-            mta_policy = None
-            try:
-                r = self.session.get(
-                    f"https://mta-sts.{self.root_domain}/.well-known/mta-sts.txt", timeout=TIMEOUT
-                )
-                if r.status_code == 200 and "version: STSv1" in r.text:
-                    mta_policy = r.text[:3000]
-            except Exception:
-                pass
-            self.mail["mta_sts_dns"] = mta_sts_dns
-            self.mail["mta_sts_policy"] = mta_policy
-            if mta_sts_dns and mta_policy:
-                self.add_check("Mail", "MTA-STS", "pass",
-                               "Wykryto rekord MTA-STS i dostępną politykę HTTPS.", 3, 3)
-            elif mta_sts_result.failed:
-                self.add_check(
-                    "Mail", "MTA-STS", "unknown",
-                    f"Nie można wiarygodnie ocenić MTA-STS z powodu błędu DNS "
-                    f"({self._dns_unavailable_message(mta_sts_result)}).",
-                    3, 0, False
-                )
-            elif mta_sts_dns or mta_policy:
-                self.add_check("Mail", "MTA-STS", "warn",
-                               "MTA-STS wygląda na częściowo skonfigurowane.", 3, 1)
-            else:
-                self.add_check("Mail", "MTA-STS", "info",
-                               f"Nie wykryto MTA-STS dla {self.root_domain}.", 3, 0)
+            self._check_mta_sts(mx_analysis)
 
             tls_rpt_result = self.dns_query_result(f"_smtp._tls.{self.root_domain}", "TXT")
             tls_rpt = [x for x in tls_rpt_result.records if "v=tlsrptv1" in x.lower()]

@@ -9,7 +9,7 @@ The scanner may query the authorized target/root domain using:
 - DNS through the system-configured resolver;
 - HTTP and HTTPS;
 - TLS handshakes;
-- `https://mta-sts.<root-domain>/.well-known/mta-sts.txt` when applicable;
+- `https://mta-sts.<root-domain>/.well-known/mta-sts.txt` only after a usable RFC 8461 MTA-STS TXT indicator is found; redirects are not followed and normal HTTPS certificate validation remains enabled;
 - `https://<web-target>/.well-known/security.txt`.
 
 Normal scan outputs can therefore be visible in the target's DNS, web-server, reverse-proxy, CDN, or firewall logs.

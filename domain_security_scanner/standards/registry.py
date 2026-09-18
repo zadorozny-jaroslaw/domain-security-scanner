@@ -26,9 +26,18 @@ RFC_7505 = StandardReference(
     scope="Mail receiving / Null MX",
 )
 
+RFC_8461 = StandardReference(
+    key="RFC8461",
+    number=8461,
+    title="SMTP MTA Strict Transport Security (MTA-STS)",
+    url="https://www.rfc-editor.org/info/rfc8461",
+    scope="Mail receiving / MTA-STS",
+)
+
 
 STANDARD_REFERENCES: dict[str, StandardReference] = {
     RFC_7505.key: RFC_7505,
+    RFC_8461.key: RFC_8461,
 }
 
 

@@ -30,7 +30,8 @@ The example below was generated against a maintainer-controlled WordPress test h
 - DMARC policy, syntax, reporting and alignment analysis
 - DKIM common-selector checks with conservative `UNKNOWN` handling
 - RFC 7505 Null MX detection and validation
-- MTA-STS and TLS-RPT checks
+- RFC 8461 MTA-STS indicator/policy validation and MX-pattern coverage
+- TLS-RPT checks
 - Passive CMS/platform fingerprinting and version discovery
 - Live CMS release-currency checks for common CMS platforms
 - Server/framework version-disclosure checks
@@ -149,7 +150,7 @@ This avoids treating a website subdomain as if it were the organization's mail d
 - DMARC aggregate reporting (`rua`)
 - DKIM/SPF alignment modes (`adkim`, `aspf`)
 - common-selector DKIM discovery (absence is not treated as proof that DKIM is missing)
-- MTA-STS
+- MTA-STS (RFC 8461 TXT indicator, HTTPS policy syntax, mode and MX coverage)
 - TLS-RPT
 
 ### Web and TLS
