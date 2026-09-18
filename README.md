@@ -1,6 +1,6 @@
 # Domain Security Scanner
 
-**Version 1.0.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
+**Version 1.1.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
 
 > **Source-available / non-commercial license.** This project is free for personal, educational, research, evaluation, testing, and internal non-commercial use. Commercial use requires separate written permission from Jarosław Zadorożny. See [LICENSE](LICENSE).
 >
@@ -21,7 +21,7 @@ The example below was generated against a maintainer-controlled WordPress test h
 - Exact web-target checks while registration and mail checks follow the registered/root domain
 - RDAP, DNSSEC, CAA, nameserver and expiry checks
 - Certificate Transparency subdomain discovery through `crt.sh`
-- DNS inventory and same-site crawling
+- DNS inventory with resolver-error awareness, live/historical hostname separation, and same-site crawling
 - HTTPS/TLS certificate analysis and legacy TLS detection
 - HTTP-to-HTTPS redirect and mixed-content checks
 - Customer-facing HTTP security-header findings
@@ -29,7 +29,9 @@ The example below was generated against a maintainer-controlled WordPress test h
 - SPF syntax, duplicate-record and recursive DNS lookup-budget analysis
 - DMARC policy, syntax, reporting and alignment analysis
 - DKIM common-selector checks with conservative `UNKNOWN` handling
-- MTA-STS and TLS-RPT checks
+- RFC 7505 Null MX detection and validation
+- RFC 8461 MTA-STS indicator/policy validation and MX-pattern coverage
+- RFC 8460 TLS-RPT policy and reporting-destination validation
 - Passive CMS/platform fingerprinting and version discovery
 - Live CMS release-currency checks for common CMS platforms
 - Server/framework version-disclosure checks
@@ -137,9 +139,11 @@ This avoids treating a website subdomain as if it were the organization's mail d
 - `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `CAA`, and selected `DS` records
 - passive Certificate Transparency hostname discovery
 
+Discovered hosts are grouped in reports as **current DNS**, **historical CT**, **currently unresolved**, **DNS status unknown**, or **not DNS-assessed**. Historical classification is conservative: a CT-discovered name is only labelled historical when current DNS returns NXDOMAIN. The existing `subdomains` JSON list remains the complete discovered-name list, while the additive `host_inventory` object provides these clearer groups.
+
 ### Mail posture
 
-- MX
+- MX, including RFC 7505 Null MX semantics
 - SPF presence and policy
 - duplicate SPF records
 - practical SPF syntax validation
@@ -148,8 +152,8 @@ This avoids treating a website subdomain as if it were the organization's mail d
 - DMARC aggregate reporting (`rua`)
 - DKIM/SPF alignment modes (`adkim`, `aspf`)
 - common-selector DKIM discovery (absence is not treated as proof that DKIM is missing)
-- MTA-STS
-- TLS-RPT
+- MTA-STS (RFC 8461 TXT indicator, HTTPS policy syntax, mode and MX coverage)
+- TLS-RPT (RFC 8460 policy syntax and `rua` reporting destinations)
 
 ### Web and TLS
 
@@ -202,7 +206,7 @@ WARN and FAIL findings include a short **Why it matters** explanation. The wordi
 
 The score is intentionally named **External Security Hygiene Score**, not a general "security score."
 
-Only applicable weighted checks contribute to the denominator. Unknown/unverifiable checks are excluded rather than penalized. Several useful findings - including CMS release currency - are informational or advisory and intentionally have no score weight.
+Only applicable weighted checks contribute to the denominator. Unknown/unverifiable checks are excluded rather than penalized. DNS timeouts, SERVFAIL responses and resolver errors are treated as unavailable evidence rather than as proof that a record is absent. Several useful findings - including CMS release currency - are informational or advisory and intentionally have no score weight.
 
 See [docs/SCORING.md](docs/SCORING.md) for the scoring philosophy.
 
@@ -235,11 +239,40 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - DKIM cannot always be discovered without knowing the selector.
 - DNSSEC presence is detected, but the scanner does not perform full cryptographic chain validation.
 - `.pl` Registry Lock may require manual verification at the registrar.
-- Certificate Transparency is historical by design; discovered hostnames may no longer resolve.
+- Certificate Transparency is historical by design; the report separates CT names that now return NXDOMAIN from hosts with current DNS records, while resolver failures remain explicitly unknown.
 - SPF lookup count is a static worst-case estimate; macros and runtime DNS behavior can affect exact evaluation.
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
 - Passive CMS detection can miss intentionally hidden or heavily proxied platforms.
+
+See [`docs/STANDARDS.md`](docs/STANDARDS.md) for the RFC/standards registry and the exact standards-backed checks implemented by the scanner.
+
+## Project structure
+
+The scanner is organized as a Python package while keeping `domain_security_scan.py` as the backward-compatible command-line entry point. Existing report fields and CLI arguments remain compatible; new evidence can be added through additive JSON fields such as `host_inventory`.
+
+```text
+domain_security_scan.py              # compatibility CLI entry point
+domain_security_scanner/
+├── __init__.py                       # public package API
+├── version.py                        # scanner version
+├── constants.py                      # shared scanner constants
+├── models.py                         # typed check/status/category/score result models
+├── utils.py                          # domain/date helper functions
+├── base.py                           # shared Scanner state
+├── rdap.py                           # RDAP/domain checks
+├── dns_mail.py                       # DNS and mail-security checks
+├── inventory.py                      # CT discovery, crawl, DNS inventory
+├── web_tls.py                        # HTTP/TLS/cookie/header checks
+├── cms.py                            # passive CMS detection/currency checks
+├── scanner.py                        # scan orchestration and scoring
+├── cli.py                            # argument parsing and output handling
+└── reporting/
+    ├── __init__.py
+    └── pdf.py                        # PDF rendering
+```
+
+This layout is intended to make later changes easier to isolate. Shared result models validate check categories/statuses centrally while preserving the existing JSON representation. For example, report rendering can evolve without mixing PDF code into DNS or TLS checks, while the top-level script remains compatible with the existing documented commands.
 
 ## Contributing
 

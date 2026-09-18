@@ -4,6 +4,32 @@ All notable project changes are documented here.
 
 The project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [1.1.0] - 2026-09-18
+
+### Added
+
+- Add RFC 7505 Null MX parsing and validation, including detection of invalid mixed Null MX/ordinary MX configurations.
+- Add a lightweight internal standards registry and dedicated mail-standard parsing helpers.
+- Add RFC 8461 MTA-STS validation for the DNS policy indicator, HTTPS response, policy syntax, modes, `max_age`, and MX-pattern coverage.
+- Add RFC 8460 TLS-RPT policy validation, including required `rua` destinations, URI scheme validation, multiple-policy detection, and extension-field handling.
+- Add an additive `host_inventory` report object that classifies discovered names as live, historical, unresolved, DNS-unknown, or not assessed.
+
+### Changed
+
+- Split the monolithic scanner into focused package modules while preserving the existing `domain_security_scan.py` CLI entry point and report compatibility.
+- Introduce typed check status/category and score result models with centralized validation while preserving serialized report values.
+- Preserve DNS lookup evidence states so timeouts, SERVFAIL responses and resolver errors are not treated as missing records.
+- Cache DNS query results during a scan to avoid repeating identical lookups.
+- Mark DNS-dependent checks as `UNKNOWN` and exclude them from scoring when required DNS evidence is unavailable.
+- Track incomplete nested SPF DNS evidence so lookup-budget checks do not report a confident pass after resolver failures.
+- Split discovered-host reporting into current DNS, historical CT/NXDOMAIN, unresolved, DNS-unknown, and not-assessed groups; keep the PDF DNS appendix focused on hosts with current records.
+
+### Fixed
+
+- Prevent transient DNS resolver failures from being misreported and scored as conclusively missing mail or domain-security records.
+
 ## [1.0.1] - 2026-09-17
 
 ### Fixed
