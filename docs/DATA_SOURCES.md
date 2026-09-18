@@ -34,7 +34,7 @@ Passive hostname history is queried through:
 https://crt.sh/
 ```
 
-The queried root domain is sent to this service. Certificate Transparency data is historical; returned names may no longer exist.
+The queried root domain is sent to this service. Certificate Transparency data is historical; returned names may no longer exist. The scanner re-checks discovered names against its low-impact common DNS inventory and separates CT names that now return NXDOMAIN from hosts with current records. A DNS timeout, SERVFAIL, or resolver error is never labelled historical; it remains an unknown DNS state. Names with no records in the queried common record types but without conclusive NXDOMAIN are shown as currently unresolved rather than historical.
 
 ## CMS release information
 

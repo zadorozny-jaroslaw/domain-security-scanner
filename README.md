@@ -21,7 +21,7 @@ The example below was generated against a maintainer-controlled WordPress test h
 - Exact web-target checks while registration and mail checks follow the registered/root domain
 - RDAP, DNSSEC, CAA, nameserver and expiry checks
 - Certificate Transparency subdomain discovery through `crt.sh`
-- DNS inventory with resolver-error awareness and same-site crawling
+- DNS inventory with resolver-error awareness, live/historical hostname separation, and same-site crawling
 - HTTPS/TLS certificate analysis and legacy TLS detection
 - HTTP-to-HTTPS redirect and mixed-content checks
 - Customer-facing HTTP security-header findings
@@ -139,6 +139,8 @@ This avoids treating a website subdomain as if it were the organization's mail d
 - `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `CAA`, and selected `DS` records
 - passive Certificate Transparency hostname discovery
 
+Discovered hosts are grouped in reports as **current DNS**, **historical CT**, **currently unresolved**, **DNS status unknown**, or **not DNS-assessed**. Historical classification is conservative: a CT-discovered name is only labelled historical when current DNS returns NXDOMAIN. The existing `subdomains` JSON list remains the complete discovered-name list, while the additive `host_inventory` object provides these clearer groups.
+
 ### Mail posture
 
 - MX, including RFC 7505 Null MX semantics
@@ -237,7 +239,7 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - DKIM cannot always be discovered without knowing the selector.
 - DNSSEC presence is detected, but the scanner does not perform full cryptographic chain validation.
 - `.pl` Registry Lock may require manual verification at the registrar.
-- Certificate Transparency is historical by design; discovered hostnames may no longer resolve.
+- Certificate Transparency is historical by design; the report separates CT names that now return NXDOMAIN from hosts with current DNS records, while resolver failures remain explicitly unknown.
 - SPF lookup count is a static worst-case estimate; macros and runtime DNS behavior can affect exact evaluation.
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
@@ -247,7 +249,7 @@ See [`docs/STANDARDS.md`](docs/STANDARDS.md) for the RFC/standards registry and 
 
 ## Project structure
 
-The scanner is organized as a Python package while keeping `domain_security_scan.py` as the backward-compatible command-line entry point. The package split is organizational only: the scan flow, checks, scoring behavior, JSON schema, PDF output, and CLI arguments remain unchanged.
+The scanner is organized as a Python package while keeping `domain_security_scan.py` as the backward-compatible command-line entry point. Existing report fields and CLI arguments remain compatible; new evidence can be added through additive JSON fields such as `host_inventory`.
 
 ```text
 domain_security_scan.py              # compatibility CLI entry point

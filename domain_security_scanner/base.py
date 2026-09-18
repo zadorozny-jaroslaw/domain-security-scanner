@@ -29,6 +29,9 @@ class BaseScanner:
 
         self.checks: list[Check] = []
         self.subdomains: set[str] = {self.target_domain, self.root_domain}
+        # Names learned from Certificate Transparency are historical evidence until
+        # current DNS confirms that they still resolve.
+        self.ct_subdomains: set[str] = set()
         self.emails: set[str] = set()
         self.crawl_mixed_content: set[str] = set()
         self.dns_records: dict[str, dict[str, list[str]]] = {}

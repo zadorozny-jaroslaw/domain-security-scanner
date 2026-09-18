@@ -19,6 +19,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Cache DNS query results during a scan to avoid repeating identical lookups.
 - Mark DNS-dependent checks as `UNKNOWN` and exclude them from scoring when required DNS evidence is unavailable.
 - Track incomplete nested SPF DNS evidence so lookup-budget checks do not report a confident pass after resolver failures.
+- Split discovered-host reporting into current DNS, historical CT/NXDOMAIN, unresolved, DNS-unknown, and not-assessed groups; keep the DNS appendix focused on hosts with current records.
 
 ## [1.0.1] - 2026-09-17
 
