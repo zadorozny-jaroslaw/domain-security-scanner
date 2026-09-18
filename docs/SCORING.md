@@ -7,7 +7,7 @@ The **External Security Hygiene Score** is a bounded summary of the checks this 
 1. **Only applicable checks count.** If a check cannot be established reliably from outside, it is normally marked `VERIFY`/`UNKNOWN` and excluded from the weighted denominator.
 2. **Configuration quality is not the same as compromise.** Missing hardening controls can reduce the score without implying that an attack has occurred.
 3. **Informational checks may have zero weight.** Useful observations such as CMS release currency or technology disclosure can be shown without materially changing the score.
-4. **False confidence is worse than uncertainty.** When the scanner cannot verify a condition, it prefers an explicit unknown result instead of assuming safety.
+4. **False confidence is worse than uncertainty.** When the scanner cannot verify a condition, it prefers an explicit unknown result instead of assuming safety. DNS timeouts, SERVFAIL responses and resolver errors are treated as unavailable evidence, not as proof that a DNS record is absent.
 5. **Weight changes are versioned.** Material changes to scoring behavior should be documented in `CHANGELOG.md`.
 
 ## Main weighted areas
@@ -17,7 +17,7 @@ The **External Security Hygiene Score** is a bounded summary of the checks this 
 - HTTPS/TLS posture
 - selected web hardening controls
 
-The exact weights live in `domain_security_scan.py` so the report always reflects the code that generated it.
+The exact weights live alongside the checks in the `domain_security_scanner` package so the report always reflects the code that generated it.
 
 ## Interpreting the score
 

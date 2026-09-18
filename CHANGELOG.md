@@ -4,6 +4,15 @@ All notable project changes are documented here.
 
 The project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Preserve DNS lookup evidence states so timeouts, SERVFAIL responses and resolver errors are not treated as missing records.
+- Cache DNS query results during a scan to avoid repeating identical lookups.
+- Mark DNS-dependent checks as `UNKNOWN` and exclude them from scoring when required DNS evidence is unavailable.
+- Track incomplete nested SPF DNS evidence so lookup-budget checks do not report a confident pass after resolver failures.
+
 ## [1.0.1] - 2026-09-17
 
 ### Fixed
