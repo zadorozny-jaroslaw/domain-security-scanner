@@ -5,8 +5,8 @@ Use semantic version tags such as `v1.0.0`, `v1.0.1`, and `v1.1.0`.
 ## Before tagging
 
 - [ ] Decide whether the change is patch, minor, or major.
-- [ ] Update `__version__` in `domain_security_scan.py`.
-- [ ] Confirm the `USER_AGENT` reflects the same version.
+- [ ] Update `__version__` in `domain_security_scanner/version.py`.
+- [ ] Confirm `python domain_security_scan.py --version` reports the same version; `USER_AGENT` is derived from `__version__`.
 - [ ] Update `CHANGELOG.md`.
 - [ ] Run the test suite on a clean virtual environment.
 - [ ] Run `python domain_security_scan.py --version`.
@@ -27,7 +27,13 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
-Then create a GitHub Release from the tag and use the matching `CHANGELOG.md` entry as the basis for the release notes.
+Then create a GitHub Release from the tag. With GitHub CLI:
+
+```bash
+gh release create vX.Y.Z --title "Domain Security Scanner vX.Y.Z" --generate-notes --verify-tag
+```
+
+Use the matching `CHANGELOG.md` entry as the curated release summary when editing the generated GitHub Release notes.
 
 ## After release
 

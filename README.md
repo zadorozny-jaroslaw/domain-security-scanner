@@ -1,6 +1,6 @@
 # Domain Security Scanner
 
-**Version 1.0.1** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
+**Version 1.1.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
 
 > **Source-available / non-commercial license.** This project is free for personal, educational, research, evaluation, testing, and internal non-commercial use. Commercial use requires separate written permission from Jarosław Zadorożny. See [LICENSE](LICENSE).
 >

@@ -9,7 +9,7 @@ from domain_security_scanner.models import DnsQueryResult, DnsQueryState
 
 class CoreHelpersTest(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(scanner.__version__, "1.0.1")
+        self.assertEqual(scanner.__version__, "1.1.0")
 
     def test_normalize_domain_preserves_web_host(self):
         self.assertEqual(
