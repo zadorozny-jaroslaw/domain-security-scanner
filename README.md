@@ -251,7 +251,7 @@ domain_security_scanner/
 ├── __init__.py                       # public package API
 ├── version.py                        # scanner version
 ├── constants.py                      # shared scanner constants
-├── models.py                         # Check result model
+├── models.py                         # typed check/status/category/score result models
 ├── utils.py                          # domain/date helper functions
 ├── base.py                           # shared Scanner state
 ├── rdap.py                           # RDAP/domain checks
@@ -266,7 +266,7 @@ domain_security_scanner/
     └── pdf.py                        # PDF rendering
 ```
 
-This layout is intended to make later changes easier to isolate. For example, report rendering can evolve without mixing PDF code into DNS or TLS checks, while the top-level script remains compatible with the existing documented commands.
+This layout is intended to make later changes easier to isolate. Shared result models validate check categories/statuses centrally while preserving the existing JSON representation. For example, report rendering can evolve without mixing PDF code into DNS or TLS checks, while the top-level script remains compatible with the existing documented commands.
 
 ## Contributing
 

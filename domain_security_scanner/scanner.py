@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime, timezone
 
 from .base import BaseScanner
 from .cms import CmsMixin
 from .dns_mail import DnsMailMixin
 from .inventory import InventoryMixin
+from .models import ScoreResult
 from .rdap import RdapMixin
 from .web_tls import WebTlsMixin
 from .version import __version__
@@ -25,7 +25,7 @@ class Scanner(RdapMixin, DnsMailMixin, InventoryMixin, WebTlsMixin, CmsMixin, Ba
         self.check_http()
         self.check_cms_currency()
 
-    def score(self):
+    def _score_result(self) -> ScoreResult:
         applicable = [c for c in self.checks if c.applicable and c.weight > 0]
         possible = sum(c.weight for c in applicable)
         earned = sum(c.earned for c in applicable)
@@ -38,12 +38,16 @@ class Scanner(RdapMixin, DnsMailMixin, InventoryMixin, WebTlsMixin, CmsMixin, Ba
             label = "Needs improvement"
         else:
             label = "Priority remediation"
-        return {
-            "score": value,
-            "label": label,
-            "earned_points": round(earned, 1),
-            "possible_points": round(possible, 1),
-        }
+        return ScoreResult(
+            score=value,
+            label=label,
+            earned_points=round(earned, 1),
+            possible_points=round(possible, 1),
+        )
+
+    def score(self) -> dict[str, int | float | str]:
+        """Return the same public score dictionary as before the model refactor."""
+        return self._score_result().to_dict()
 
     def to_dict(self):
         return {
@@ -53,7 +57,7 @@ class Scanner(RdapMixin, DnsMailMixin, InventoryMixin, WebTlsMixin, CmsMixin, Ba
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "scanner_version": __version__,
             "score": self.score(),
-            "checks": [asdict(c) for c in self.checks],
+            "checks": [c.to_dict() for c in self.checks],
             "rdap": self.rdap,
             "mail": self.mail,
             "tls": self.tls,
