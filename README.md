@@ -29,6 +29,7 @@ The example below was generated against a maintainer-controlled WordPress test h
 - SPF syntax, duplicate-record and recursive DNS lookup-budget analysis
 - DMARC policy, syntax, reporting and alignment analysis
 - DKIM common-selector checks with conservative `UNKNOWN` handling
+- RFC 7505 Null MX detection and validation
 - MTA-STS and TLS-RPT checks
 - Passive CMS/platform fingerprinting and version discovery
 - Live CMS release-currency checks for common CMS platforms
@@ -139,7 +140,7 @@ This avoids treating a website subdomain as if it were the organization's mail d
 
 ### Mail posture
 
-- MX
+- MX, including RFC 7505 Null MX semantics
 - SPF presence and policy
 - duplicate SPF records
 - practical SPF syntax validation
@@ -240,6 +241,8 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
 - Passive CMS detection can miss intentionally hidden or heavily proxied platforms.
+
+See [`docs/STANDARDS.md`](docs/STANDARDS.md) for the RFC/standards registry and the exact standards-backed checks implemented by the scanner.
 
 ## Project structure
 

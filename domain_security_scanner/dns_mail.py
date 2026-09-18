@@ -9,6 +9,7 @@ import dns.resolver
 
 from .constants import COMMON_DKIM_SELECTORS, COMMON_DNS_TYPES, TIMEOUT
 from .models import DnsQueryResult, DnsQueryState
+from .standards import RFC_7505, analyze_mx_records
 
 
 class DnsMailMixin:
@@ -405,17 +406,40 @@ class DnsMailMixin:
         self.mail["domain"] = self.root_domain
         mx_result = root_results["MX"]
         mx = root.get("MX", [])
+        mx_analysis = analyze_mx_records(mx)
+        null_mx = bool(mx_analysis["null_mx"])
         self.mail["mx"] = mx
-        if mx:
-            self.add_check("Mail", "MX", "pass",
-                           f"Wykryto {len(mx)} rekord(y) MX dla {self.root_domain}.", 2, 2)
-        elif mx_result.failed:
+        self.mail["mx_analysis"] = {
+            **mx_analysis,
+            "standard": RFC_7505.label,
+        }
+        self.mail["null_mx"] = null_mx
+        self.mail["accepts_inbound_mail"] = False if null_mx else (True if mx else None)
+
+        if mx_result.failed:
             self.add_check(
                 "Mail", "MX", "unknown",
                 f"Nie można ocenić rekordów MX z powodu błędu DNS "
                 f"({self._dns_unavailable_message(mx_result)}).",
                 2, 0, False
             )
+        elif null_mx:
+            self.add_check(
+                "Mail", "MX", "pass",
+                f"Domena publikuje prawidłowy Null MX (0 .) zgodny z {RFC_7505.label}; "
+                "jawnie nie przyjmuje poczty przychodzącej.",
+                2, 2
+            )
+        elif mx and not mx_analysis["valid"]:
+            self.add_check(
+                "Mail", "MX", "fail",
+                f"Konfiguracja MX jest niezgodna z {RFC_7505.label}: "
+                + "; ".join(mx_analysis["errors"][:3]),
+                2, 0
+            )
+        elif mx:
+            self.add_check("Mail", "MX", "pass",
+                           f"Wykryto {len(mx)} rekord(y) MX dla {self.root_domain}.", 2, 2)
         else:
             self.add_check("Mail", "MX", "info",
                            f"Brak rekordów MX dla {self.root_domain}. Jeśli domena nie obsługuje poczty, może to być zamierzone.",
@@ -603,48 +627,63 @@ class DnsMailMixin:
                 5, 0, False
             )
 
-        mta_sts_result = self.dns_query_result(f"_mta-sts.{self.root_domain}", "TXT")
-        mta_sts_dns = list(mta_sts_result.records)
-        mta_policy = None
-        try:
-            r = self.session.get(
-                f"https://mta-sts.{self.root_domain}/.well-known/mta-sts.txt", timeout=TIMEOUT
-            )
-            if r.status_code == 200 and "version: STSv1" in r.text:
-                mta_policy = r.text[:3000]
-        except Exception:
-            pass
-        self.mail["mta_sts_dns"] = mta_sts_dns
-        self.mail["mta_sts_policy"] = mta_policy
-        if mta_sts_dns and mta_policy:
-            self.add_check("Mail", "MTA-STS", "pass",
-                           "Wykryto rekord MTA-STS i dostępną politykę HTTPS.", 3, 3)
-        elif mta_sts_result.failed:
+        if null_mx:
+            self.mail["mta_sts_dns"] = []
+            self.mail["mta_sts_policy"] = None
+            self.mail["tls_rpt"] = []
             self.add_check(
-                "Mail", "MTA-STS", "unknown",
-                f"Nie można wiarygodnie ocenić MTA-STS z powodu błędu DNS "
-                f"({self._dns_unavailable_message(mta_sts_result)}).",
+                "Mail", "MTA-STS", "info",
+                f"MTA-STS nie ma zastosowania do domeny z prawidłowym Null MX ({RFC_7505.label}).",
                 3, 0, False
             )
-        elif mta_sts_dns or mta_policy:
-            self.add_check("Mail", "MTA-STS", "warn",
-                           "MTA-STS wygląda na częściowo skonfigurowane.", 3, 1)
-        else:
-            self.add_check("Mail", "MTA-STS", "info",
-                           f"Nie wykryto MTA-STS dla {self.root_domain}.", 3, 0)
-
-        tls_rpt_result = self.dns_query_result(f"_smtp._tls.{self.root_domain}", "TXT")
-        tls_rpt = [x for x in tls_rpt_result.records if "v=tlsrptv1" in x.lower()]
-        self.mail["tls_rpt"] = tls_rpt
-        if tls_rpt:
-            self.add_check("Mail", "TLS-RPT", "pass", "Wykryto rekord TLS-RPT.", 2, 2)
-        elif tls_rpt_result.failed:
             self.add_check(
-                "Mail", "TLS-RPT", "unknown",
-                f"Nie można wiarygodnie ocenić TLS-RPT z powodu błędu DNS "
-                f"({self._dns_unavailable_message(tls_rpt_result)}).",
+                "Mail", "TLS-RPT", "info",
+                f"TLS-RPT nie ma zastosowania do domeny z prawidłowym Null MX ({RFC_7505.label}).",
                 2, 0, False
             )
         else:
-            self.add_check("Mail", "TLS-RPT", "info",
-                           f"Nie wykryto TLS-RPT dla {self.root_domain}.", 2, 0)
+            mta_sts_result = self.dns_query_result(f"_mta-sts.{self.root_domain}", "TXT")
+            mta_sts_dns = list(mta_sts_result.records)
+            mta_policy = None
+            try:
+                r = self.session.get(
+                    f"https://mta-sts.{self.root_domain}/.well-known/mta-sts.txt", timeout=TIMEOUT
+                )
+                if r.status_code == 200 and "version: STSv1" in r.text:
+                    mta_policy = r.text[:3000]
+            except Exception:
+                pass
+            self.mail["mta_sts_dns"] = mta_sts_dns
+            self.mail["mta_sts_policy"] = mta_policy
+            if mta_sts_dns and mta_policy:
+                self.add_check("Mail", "MTA-STS", "pass",
+                               "Wykryto rekord MTA-STS i dostępną politykę HTTPS.", 3, 3)
+            elif mta_sts_result.failed:
+                self.add_check(
+                    "Mail", "MTA-STS", "unknown",
+                    f"Nie można wiarygodnie ocenić MTA-STS z powodu błędu DNS "
+                    f"({self._dns_unavailable_message(mta_sts_result)}).",
+                    3, 0, False
+                )
+            elif mta_sts_dns or mta_policy:
+                self.add_check("Mail", "MTA-STS", "warn",
+                               "MTA-STS wygląda na częściowo skonfigurowane.", 3, 1)
+            else:
+                self.add_check("Mail", "MTA-STS", "info",
+                               f"Nie wykryto MTA-STS dla {self.root_domain}.", 3, 0)
+
+            tls_rpt_result = self.dns_query_result(f"_smtp._tls.{self.root_domain}", "TXT")
+            tls_rpt = [x for x in tls_rpt_result.records if "v=tlsrptv1" in x.lower()]
+            self.mail["tls_rpt"] = tls_rpt
+            if tls_rpt:
+                self.add_check("Mail", "TLS-RPT", "pass", "Wykryto rekord TLS-RPT.", 2, 2)
+            elif tls_rpt_result.failed:
+                self.add_check(
+                    "Mail", "TLS-RPT", "unknown",
+                    f"Nie można wiarygodnie ocenić TLS-RPT z powodu błędu DNS "
+                    f"({self._dns_unavailable_message(tls_rpt_result)}).",
+                    2, 0, False
+                )
+            else:
+                self.add_check("Mail", "TLS-RPT", "info",
+                               f"Nie wykryto TLS-RPT dla {self.root_domain}.", 2, 0)

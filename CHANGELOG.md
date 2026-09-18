@@ -6,6 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add RFC 7505 Null MX parsing and validation, including detection of invalid mixed Null MX/ordinary MX configurations.
+- Add a small internal standards reference registry for standards-backed checks.
+
 ### Changed
 
 - Preserve DNS lookup evidence states so timeouts, SERVFAIL responses and resolver errors are not treated as missing records.
