@@ -8,9 +8,83 @@ The registry is intentionally small. It is not a general RFC database and does n
 
 | Standard | Scanner coverage | Canonical reference |
 | --- | --- | --- |
+| RFC 3986 | URI/URI-reference validation used by redirects and `security.txt` fields | https://www.rfc-editor.org/info/rfc3986 |
+| RFC 6797 | HSTS syntax, required `max-age`, duplicate directives, active/inactive policy | https://www.rfc-editor.org/info/rfc6797 |
 | RFC 7505 | Null MX detection and validation | https://www.rfc-editor.org/info/rfc7505 |
 | RFC 8460 | TLS-RPT TXT policy, `rua` destinations and extension handling | https://www.rfc-editor.org/info/rfc8460 |
 | RFC 8461 | MTA-STS TXT indicator, HTTPS policy, modes and MX-pattern coverage | https://www.rfc-editor.org/info/rfc8461 |
+| RFC 8615 | `/.well-known/` location used by `security.txt` | https://www.rfc-editor.org/info/rfc8615 |
+| RFC 9110 | HTTP redirect status and `Location` semantics | https://www.rfc-editor.org/info/rfc9110 |
+| RFC 9116 | `security.txt` location, media type, required fields and expiry | https://www.rfc-editor.org/info/rfc9116 |
+| RFC 10025 | `Set-Cookie` syntax/security semantics, SameSite and secure cookie prefixes | https://www.rfc-editor.org/info/rfc10025 |
+
+## Web standards
+
+### RFC 9110 + RFC 3986 — HTTP redirects and `Location`
+
+The HTTP-to-HTTPS check now treats `301`, `302`, `303`, `307`, and `308` as redirect responses that can carry a `Location` URI-reference. The scanner validates the `Location` value as a practical RFC 3986 URI-reference, resolves relative references against the original HTTP target, and only reports a successful HTTP-to-HTTPS upgrade when the resolved target uses the `https` scheme.
+
+This means a relative redirect such as `Location: /home` from an `http://` request is still a redirect, but it is not counted as an HTTPS upgrade because resolving it retains the `http` scheme.
+
+### RFC 6797 — HTTP Strict Transport Security (HSTS)
+
+The scanner no longer treats mere presence of `Strict-Transport-Security` as a successful HSTS configuration.
+
+It validates the policy structure used by RFC 6797, including:
+
+- required `max-age`;
+- decimal `max-age` value, including quoted values;
+- directives appearing at most once;
+- valueless `includeSubDomains`;
+- syntactically valid unknown extension directives being ignored rather than rejected;
+- more than one server-sent STS field being reported as invalid server output.
+
+A syntactically valid `max-age=0` policy is recognized as valid protocol syntax but is reported as an inactive HSTS policy because it instructs user agents to remove/disable the cached HSTS policy.
+
+### RFC 10025 — Cookies: HTTP State Management Mechanism
+
+The existing cookie hardening check is now split conceptually into two kinds of evidence:
+
+1. RFC-defined `Set-Cookie` requirements that can make server output invalid or cause a conforming user agent to reject a cookie; and
+2. project hardening recommendations for sensitive/session-like cookies.
+
+RFC-backed validation currently checks:
+
+- duplicate cookie attributes in one `Set-Cookie` field;
+- valid `SameSite` values;
+- the `SameSite=None` requirement for `Secure`;
+- `__Secure-` cookies requiring `Secure`;
+- `__Host-` cookies requiring `Secure`, `Path=/`, and no `Domain` attribute;
+- non-empty cookie names.
+
+The existing scanner policy still recommends `Secure`, `HttpOnly`, and an explicit `SameSite` value for cookies heuristically identified as session/authentication sensitive. Those recommendations are intentionally described as hardening rather than universal RFC conformance requirements.
+
+RFC 10025 obsoletes RFC 6265, so new scanner references use RFC 10025.
+
+### RFC 9116 + RFC 8615 + RFC 3986 — `security.txt`
+
+The scanner requests the registered well-known location:
+
+```text
+https://<web-target>/.well-known/security.txt
+```
+
+A present file is validated for the core externally testable requirements, including:
+
+- successful retrieval over HTTPS;
+- the `/.well-known/security.txt` path;
+- `Content-Type: text/plain` with UTF-8 charset;
+- at least one `Contact` field;
+- exactly one `Expires` field;
+- a valid RFC 3339 expiry that has not already passed;
+- URI syntax for `Contact` and `Canonical` values;
+- HTTPS for web-based `Contact`/`Canonical` URIs;
+- a warning when `Canonical` is present but does not list the retrieval URI;
+- a warning when the redirect chain ends on a different host, because trust then needs additional review.
+
+`security.txt` remains informational/advisory and has no score weight. A malformed or expired file can therefore be shown as `REVIEW` without changing the External Security Hygiene Score.
+
+## Mail standards
 
 ### RFC 7505 — Null MX
 
