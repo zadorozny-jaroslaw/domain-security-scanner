@@ -16,6 +16,32 @@ from reportlab.platypus import (
 )
 
 
+REPORT_SCAN_GROUPS = ("domain", "discovery", "mail", "tls", "web", "cms")
+
+
+def _report_scan_scope(report: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Return effective, skipped, and warning metadata for report rendering.
+
+    Older JSON reports predate scan_groups, so they remain backward-compatible
+    and render as full scans. An explicitly empty scan_groups list means that no
+    functional groups were selected.
+    """
+    if "scan_groups" not in report:
+        selected = REPORT_SCAN_GROUPS
+    else:
+        selected_set = set(report.get("scan_groups") or ())
+        selected = tuple(group for group in REPORT_SCAN_GROUPS if group in selected_set)
+
+    skipped = tuple(group for group in REPORT_SCAN_GROUPS if group not in selected)
+    selection = report.get("scan_selection", {}) or {}
+    warnings_list = tuple(
+        str(item).strip()
+        for item in (selection.get("warnings") or ())
+        if str(item).strip()
+    )
+    return selected, skipped, warnings_list
+
+
 def register_pdf_fonts() -> tuple[str, str]:
     """Register a Unicode TTF font so Polish characters render correctly.
 
@@ -365,6 +391,9 @@ def generate_pdf(report: dict[str, Any], output: Path):
     score_bg, score_fg, score_label = _score_palette(score_value)
     checks = report.get("checks", [])
     counts = {s: sum(1 for c in checks if c.get("status") == s) for s in ("fail", "warn", "pass", "info", "unknown")}
+    selected_scan_groups, skipped_scan_groups, selection_warnings = _report_scan_scope(report)
+    selected_scan_group_set = set(selected_scan_groups)
+    scan_selection = report.get("scan_selection", {}) or {}
 
     story.append(Paragraph("External Security Hygiene Report", styles["CenterTitle"]))
     story.append(Paragraph(f"<b>{p(report['target_domain'])}</b>", ParagraphStyle(
@@ -434,6 +463,54 @@ def generate_pdf(report: dict[str, Any], output: Path):
         ("BOTTOMPADDING", (0,0), (-1,-1), 4),
     ]))
     story.append(meta)
+    story.append(Spacer(1, 6))
+
+    scope_rows = [
+        ["Scanned groups", ", ".join(selected_scan_groups) or "(none)"],
+        ["Skipped groups", ", ".join(skipped_scan_groups) or "(none)"],
+    ]
+    requested_scan = scan_selection.get("requested")
+    requested_skip = scan_selection.get("skipped") or []
+    if requested_scan is not None:
+        scope_rows.append(["Requested --scan", ", ".join(requested_scan) or "(none)"])
+    if requested_skip:
+        scope_rows.append(["Requested --skip", ", ".join(requested_skip)])
+
+    scope_table = Table([
+        [Paragraph(f"<b>{p(label)}</b>", styles["Small"]), Paragraph(p(value), styles["Small"])]
+        for label, value in scope_rows
+    ], colWidths=[40*mm, 138*mm])
+    scope_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#F8FAFC")),
+        ("GRID", (0,0), (-1,-1), 0.25, colors.HexColor("#CBD5E1")),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("FONTNAME", (0,0), (-1,-1), regular_font),
+        ("LEFTPADDING", (0,0), (-1,-1), 4),
+        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+        ("TOPPADDING", (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+    ]))
+    story.append(Paragraph("Scan scope", styles["Heading3"]))
+    story.append(scope_table)
+
+    if selection_warnings:
+        warning_rows = [
+            [Paragraph(f"<b>Selection warning:</b> {p(warning)}", styles["Small"])]
+            for warning in selection_warnings
+        ]
+        warning_table = Table(warning_rows, colWidths=[178*mm])
+        warning_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#FEF3C7")),
+            ("BOX", (0,0), (-1,-1), 0.6, colors.HexColor("#D97706")),
+            ("TEXTCOLOR", (0,0), (-1,-1), colors.HexColor("#92400E")),
+            ("LEFTPADDING", (0,0), (-1,-1), 6),
+            ("RIGHTPADDING", (0,0), (-1,-1), 6),
+            ("TOPPADDING", (0,0), (-1,-1), 5),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ]))
+        story.append(Spacer(1, 5))
+        story.append(warning_table)
+
     story.append(Spacer(1, 6))
     story.append(Paragraph(
         "<b>How to read this report:</b> red findings should be reviewed first, amber findings are recommended improvements, "
@@ -530,238 +607,270 @@ def generate_pdf(report: dict[str, Any], output: Path):
     table.setStyle(TableStyle(table_style))
     story.append(table)
 
-    # Technical detail sections.
-    story.append(Paragraph("Domain / RDAP", styles["Section"]))
-    rdap = report.get("rdap", {})
-    domain_rows = [
-        ["Web host", report.get("target_domain", report.get("domain"))],
-        ["Registered/root domain", report.get("root_domain", "n/a")],
-        ["RDAP source", rdap.get("url", "n/a")],
-        ["Registrar", rdap.get("registrar", "n/a")],
-        ["Nameservers", ", ".join(rdap.get("nameservers", [])) or "n/a"],
-        ["Statuses", ", ".join(rdap.get("status", [])) or "n/a"],
-        ["Transfer lock", rdap.get("transfer_lock", "unknown")],
-        ["NASK state", rdap.get("nask0_state", "n/a")],
-    ]
-    t = Table([[Paragraph(f"<b>{p(a)}</b>", styles["Small"]), Paragraph(p(b), styles["Small"])] for a,b in domain_rows],
-              colWidths=[40*mm, 138*mm])
-    t.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(0,-1),colors.HexColor("#F8FAFC")),
-        ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
-        ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ("FONTNAME",(0,0),(-1,-1),regular_font),
-    ]))
-    story.append(t)
-
-    story.append(Paragraph(f"Mail security - {p(report.get('root_domain', ''))}", styles["Section"]))
-    mail = report.get("mail", {})
-    spf_analysis = mail.get("spf_analysis", {}) or {}
-    spf_dns = spf_analysis.get("dns_lookups", {}) or {}
-    dmarc_analysis = mail.get("dmarc_analysis", {}) or {}
-    mail_rows = [
-        ["MX", "<br/>".join(p(x) for x in mail.get("mx", [])) or "n/a"],
-        ["SPF", "<br/>".join(p(x) for x in mail.get("spf", [])) or "not detected"],
-        ["SPF record count", spf_analysis.get("record_count", "n/a")],
-        ["SPF syntax", "valid" if (spf_analysis.get("syntax", {}) or {}).get("valid") else ("invalid" if spf_analysis.get("syntax") else "n/a")],
-        ["SPF DNS lookup estimate", f"{spf_dns.get('count')}/10" if spf_dns.get("count") is not None else "n/a"],
-        ["DMARC", "<br/>".join(p(x) for x in mail.get("dmarc", [])) or "not detected"],
-        ["DMARC policy", p(mail.get("dmarc_policy", "n/a"))],
-        ["DMARC subdomain policy", dmarc_analysis.get("subdomain_policy", "n/a")],
-        ["DMARC pct", dmarc_analysis.get("pct", "n/a")],
-        ["DMARC aggregate reports (rua)", ", ".join(dmarc_analysis.get("rua", [])) or "not configured"],
-        ["DMARC alignment", f"DKIM={dmarc_analysis.get('adkim','n/a')} / SPF={dmarc_analysis.get('aspf','n/a')}"],
-        ["DKIM selectors found", ", ".join(mail.get("dkim_common_selectors", {}).keys()) or "not confirmed"],
-        ["MTA-STS", "detected" if mail.get("mta_sts_dns") or mail.get("mta_sts_policy") else "not detected"],
-        ["TLS-RPT", "<br/>".join(p(x) for x in mail.get("tls_rpt", [])) or "not detected"],
-    ]
-    t = Table([[Paragraph(f"<b>{p(a)}</b>", styles["Small"]), Paragraph(str(b), styles["Small"])] for a,b in mail_rows],
-              colWidths=[40*mm, 138*mm])
-    t.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(0,-1),colors.HexColor("#F8FAFC")),
-        ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
-        ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ("FONTNAME",(0,0),(-1,-1),regular_font),
-    ]))
-    story.append(t)
-
-    story.append(Paragraph("Web / TLS", styles["Section"]))
-    tls = report.get("tls", {})
-    http = report.get("http", {})
-    cms = http.get("cms", {}) or {}
-    cms_name = cms.get("name") or "not reliably detected"
-    cms_version = cms.get("version") or "not disclosed"
-    cms_confidence = cms.get("confidence") or "none"
-    cms_display = f"{cms_name} | version: {cms_version} | confidence: {cms_confidence}"
-    currency = cms.get("currency", {}) or {}
-    latest_display = currency.get("latest_same_major") or currency.get("latest_version") or "not checked"
-    currency_status = str(currency.get("status") or "not checked").replace("_", " ")
-
-    web_rows = [
-        ["CMS / platform", cms_display],
-        ["CMS latest stable", latest_display],
-        ["CMS update status", currency_status],
-        ["TLS protocol", tls.get("protocol", "n/a")],
-        ["TLS cipher", tls.get("cipher", "n/a")],
-        ["TLS 1.0", (tls.get("protocol_support", {}).get("TLS 1.0", {}) or {}).get("status", "not checked")],
-        ["TLS 1.1", (tls.get("protocol_support", {}).get("TLS 1.1", {}) or {}).get("status", "not checked")],
-        ["Certificate expires in", f"{tls.get('expiry_days')} days" if tls.get("expiry_days") is not None else "n/a"],
-        ["HTTPS final URL", http.get("final_url", "n/a")],
-        ["HTTPS status", http.get("https_status", "n/a")],
-        ["Mixed content", f"{len(http.get('mixed_content', []))} insecure reference(s)" if http.get("mixed_content") else "none detected"],
-        ["Cookie security flags", f"{(http.get('cookies', {}) or {}).get('sensitive_count', 0)} sensitive / {(http.get('cookies', {}) or {}).get('warning_count', 0)} warning(s)"],
-        ["Server/version disclosure", ", ".join(f"{k}: {v}" for k, v in (http.get("server_disclosure", {}).get("headers", {}) or {}).items()) or "none detected"],
-        ["security.txt", "yes" if http.get("security_txt") else "no / unknown"],
-        ["CMS evidence", "; ".join(cms.get("signals", [])[:5]) or "n/a"],
-    ]
-
-    web_detail_rows = [["Status", "Item", "Value"]]
-    web_detail_statuses = []
-    for label, value in web_rows:
-        display_status = _technical_status(label, value, report)
-        web_detail_statuses.append(display_status)
-        status_label = {
-            "pass": "OK",
-            "warn": "REVIEW",
-            "fail": "ACTION",
-            "info": "INFO",
-            "unknown": "VERIFY",
-        }.get(display_status, display_status.upper())
-        web_detail_rows.append([
-            status_label,
-            Paragraph(f"<b>{p(label)}</b>", styles["Small"]),
-            Paragraph(p(value), styles["Small"]),
-        ])
-
-    t = Table(web_detail_rows, colWidths=[22*mm, 44*mm, 112*mm], repeatRows=1)
-    web_style = [
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0F172A")),
-        ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("FONTNAME",(0,0),(-1,0),bold_font),
-        ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
-        ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ("FONTNAME",(0,1),(-1,-1),regular_font),
-        ("FONTSIZE",(0,0),(-1,-1),7),
-        ("LEFTPADDING",(0,0),(-1,-1),4),
-        ("RIGHTPADDING",(0,0),(-1,-1),4),
-        ("TOPPADDING",(0,0),(-1,-1),4),
-        ("BOTTOMPADDING",(0,0),(-1,-1),4),
-    ]
-    for idx, display_status in enumerate(web_detail_statuses, start=1):
-        bg, fg, border = _status_palette(display_status)
-        web_style += [
-            ("BACKGROUND", (0,idx), (0,idx), bg),
-            ("TEXTCOLOR", (0,idx), (0,idx), fg),
-            ("FONTNAME", (0,idx), (0,idx), bold_font),
-            ("BACKGROUND", (1,idx), (1,idx), colors.HexColor("#F8FAFC")),
+    # Scope-aware technical detail sections.
+    if "domain" in selected_scan_group_set:
+        story.append(Paragraph("Domain / RDAP", styles["Section"]))
+        rdap = report.get("rdap", {})
+        domain_rows = [
+            ["Web host", report.get("target_domain", report.get("domain"))],
+            ["Registered/root domain", report.get("root_domain", "n/a")],
+            ["RDAP source", rdap.get("url", "n/a")],
+            ["Registrar", rdap.get("registrar", "n/a")],
+            ["Nameservers", ", ".join(rdap.get("nameservers", [])) or "n/a"],
+            ["Statuses", ", ".join(rdap.get("status", [])) or "n/a"],
+            ["Transfer lock", rdap.get("transfer_lock", "unknown")],
+            ["NASK state", rdap.get("nask0_state", "n/a")],
         ]
-        # Give status-sensitive rows a subtle whole-row tint.
-        if display_status == "pass":
-            web_style.append(("BACKGROUND", (2,idx), (2,idx), colors.HexColor("#F0FDF4")))
-        elif display_status == "warn":
-            web_style.append(("BACKGROUND", (1,idx), (-1,idx), colors.HexColor("#FFFBEB")))
-        elif display_status == "fail":
-            web_style.append(("BACKGROUND", (1,idx), (-1,idx), colors.HexColor("#FEF2F2")))
-        elif display_status == "unknown":
-            web_style.append(("BACKGROUND", (2,idx), (2,idx), colors.HexColor("#F9FAFB")))
-    t.setStyle(TableStyle(web_style))
-    story.append(t)
+        t = Table([
+            [Paragraph(f"<b>{p(a)}</b>", styles["Small"]), Paragraph(p(b), styles["Small"])]
+            for a, b in domain_rows
+        ], colWidths=[40*mm, 138*mm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(0,-1),colors.HexColor("#F8FAFC")),
+            ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("FONTNAME",(0,0),(-1,-1),regular_font),
+        ]))
+        story.append(t)
 
-    story.append(PageBreak())
-    story.append(Paragraph("External inventory", styles["Section"]))
-    inventory = _host_inventory_groups(report)
-    discovered_count = len(report.get("subdomains", []))
-    story.append(Paragraph(
-        f"<b>Subdomains / hosts discovered:</b> {discovered_count} &nbsp; "
-        f"<b>current DNS:</b> {len(inventory['live'])} &nbsp; "
-        f"<b>historical:</b> {len(inventory['historical'])}",
-        styles["BodyText"]
-    ))
+    if "mail" in selected_scan_group_set:
+        story.append(Paragraph(f"Mail security - {p(report.get('root_domain', ''))}", styles["Section"]))
+        mail = report.get("mail", {})
+        spf_analysis = mail.get("spf_analysis", {}) or {}
+        spf_dns = spf_analysis.get("dns_lookups", {}) or {}
+        dmarc_analysis = mail.get("dmarc_analysis", {}) or {}
+        mail_rows = [
+            ["MX", "<br/>".join(p(x) for x in mail.get("mx", [])) or "n/a"],
+            ["SPF", "<br/>".join(p(x) for x in mail.get("spf", [])) or "not detected"],
+            ["SPF record count", spf_analysis.get("record_count", "n/a")],
+            ["SPF syntax", "valid" if (spf_analysis.get("syntax", {}) or {}).get("valid") else ("invalid" if spf_analysis.get("syntax") else "n/a")],
+            ["SPF DNS lookup estimate", f"{spf_dns.get('count')}/10" if spf_dns.get("count") is not None else "n/a"],
+            ["DMARC", "<br/>".join(p(x) for x in mail.get("dmarc", [])) or "not detected"],
+            ["DMARC policy", p(mail.get("dmarc_policy", "n/a"))],
+            ["DMARC subdomain policy", dmarc_analysis.get("subdomain_policy", "n/a")],
+            ["DMARC pct", dmarc_analysis.get("pct", "n/a")],
+            ["DMARC aggregate reports (rua)", ", ".join(dmarc_analysis.get("rua", [])) or "not configured"],
+            ["DMARC alignment", f"DKIM={dmarc_analysis.get('adkim','n/a')} / SPF={dmarc_analysis.get('aspf','n/a')}"],
+            ["DKIM selectors found", ", ".join(mail.get("dkim_common_selectors", {}).keys()) or "not confirmed"],
+            ["MTA-STS", "detected" if mail.get("mta_sts_dns") or mail.get("mta_sts_policy") else "not detected"],
+            ["TLS-RPT", "<br/>".join(p(x) for x in mail.get("tls_rpt", [])) or "not detected"],
+        ]
+        t = Table([
+            [Paragraph(f"<b>{p(a)}</b>", styles["Small"]), Paragraph(str(b), styles["Small"])]
+            for a, b in mail_rows
+        ], colWidths=[40*mm, 138*mm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(0,-1),colors.HexColor("#F8FAFC")),
+            ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("FONTNAME",(0,0),(-1,-1),regular_font),
+        ]))
+        story.append(t)
 
-    def append_host_group(title: str, hosts: list[str], note: str | None = None):
-        if not hosts:
-            return
-        story.append(Paragraph(title, styles["Heading3"]))
-        if note:
-            story.append(Paragraph(note, styles["Tiny"]))
-        host_rows = [["Host"]] + [[Paragraph(p(host), styles["Small"])] for host in hosts]
-        ht = Table(host_rows, colWidths=[178*mm], repeatRows=1)
-        ht.setStyle(TableStyle([
+    selected_web_detail_groups = [
+        ("web", "Web"),
+        ("tls", "TLS"),
+        ("cms", "CMS"),
+    ]
+    selected_web_detail_labels = [
+        label for group, label in selected_web_detail_groups
+        if group in selected_scan_group_set
+    ]
+
+    if selected_web_detail_labels:
+        tls = report.get("tls", {})
+        http = report.get("http", {})
+        cms = http.get("cms", {}) or {}
+        cms_name = cms.get("name") or "not reliably detected"
+        cms_version = cms.get("version") or "not disclosed"
+        cms_confidence = cms.get("confidence") or "none"
+        cms_display = f"{cms_name} | version: {cms_version} | confidence: {cms_confidence}"
+        currency = cms.get("currency", {}) or {}
+        latest_display = currency.get("latest_same_major") or currency.get("latest_version") or "not checked"
+        currency_status = str(currency.get("status") or "not checked").replace("_", " ")
+
+        web_rows = []
+        if "cms" in selected_scan_group_set:
+            web_rows.extend([
+                ["CMS / platform", cms_display],
+                ["CMS latest stable", latest_display],
+                ["CMS update status", currency_status],
+                ["CMS evidence", "; ".join(cms.get("signals", [])[:5]) or "n/a"],
+            ])
+        if "tls" in selected_scan_group_set:
+            web_rows.extend([
+                ["TLS protocol", tls.get("protocol", "n/a")],
+                ["TLS cipher", tls.get("cipher", "n/a")],
+                ["TLS 1.0", (tls.get("protocol_support", {}).get("TLS 1.0", {}) or {}).get("status", "not checked")],
+                ["TLS 1.1", (tls.get("protocol_support", {}).get("TLS 1.1", {}) or {}).get("status", "not checked")],
+                ["Certificate expires in", f"{tls.get('expiry_days')} days" if tls.get("expiry_days") is not None else "n/a"],
+            ])
+        if "web" in selected_scan_group_set:
+            web_rows.extend([
+                ["HTTPS final URL", http.get("final_url", "n/a")],
+                ["HTTPS status", http.get("https_status", "n/a")],
+                ["Mixed content", f"{len(http.get('mixed_content', []))} insecure reference(s)" if http.get("mixed_content") else "none detected"],
+                ["Cookie security flags", f"{(http.get('cookies', {}) or {}).get('sensitive_count', 0)} sensitive / {(http.get('cookies', {}) or {}).get('warning_count', 0)} warning(s)"],
+                ["Server/version disclosure", ", ".join(f"{k}: {v}" for k, v in (http.get("server_disclosure", {}).get("headers", {}) or {}).items()) or "none detected"],
+                ["security.txt", "yes" if http.get("security_txt") else "no / unknown"],
+            ])
+
+        story.append(Paragraph(" / ".join(selected_web_detail_labels), styles["Section"]))
+        web_detail_rows = [["Status", "Item", "Value"]]
+        web_detail_statuses = []
+        for label, value in web_rows:
+            display_status = _technical_status(label, value, report)
+            web_detail_statuses.append(display_status)
+            status_label = {
+                "pass": "OK",
+                "warn": "REVIEW",
+                "fail": "ACTION",
+                "info": "INFO",
+                "unknown": "VERIFY",
+            }.get(display_status, display_status.upper())
+            web_detail_rows.append([
+                status_label,
+                Paragraph(f"<b>{p(label)}</b>", styles["Small"]),
+                Paragraph(p(value), styles["Small"]),
+            ])
+
+        t = Table(web_detail_rows, colWidths=[22*mm, 44*mm, 112*mm], repeatRows=1)
+        web_style = [
             ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0F172A")),
             ("TEXTCOLOR",(0,0),(-1,0),colors.white),
             ("FONTNAME",(0,0),(-1,0),bold_font),
-            ("FONTNAME",(0,1),(-1,-1),regular_font),
             ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("FONTNAME",(0,1),(-1,-1),regular_font),
             ("FONTSIZE",(0,0),(-1,-1),7),
-            ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ]))
-        story.append(ht)
+            ("LEFTPADDING",(0,0),(-1,-1),4),
+            ("RIGHTPADDING",(0,0),(-1,-1),4),
+            ("TOPPADDING",(0,0),(-1,-1),4),
+            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+        ]
+        for idx, display_status in enumerate(web_detail_statuses, start=1):
+            bg, fg, border = _status_palette(display_status)
+            web_style += [
+                ("BACKGROUND", (0,idx), (0,idx), bg),
+                ("TEXTCOLOR", (0,idx), (0,idx), fg),
+                ("FONTNAME", (0,idx), (0,idx), bold_font),
+                ("BACKGROUND", (1,idx), (1,idx), colors.HexColor("#F8FAFC")),
+            ]
+            if display_status == "pass":
+                web_style.append(("BACKGROUND", (2,idx), (2,idx), colors.HexColor("#F0FDF4")))
+            elif display_status == "warn":
+                web_style.append(("BACKGROUND", (1,idx), (-1,idx), colors.HexColor("#FFFBEB")))
+            elif display_status == "fail":
+                web_style.append(("BACKGROUND", (1,idx), (-1,idx), colors.HexColor("#FEF2F2")))
+            elif display_status == "unknown":
+                web_style.append(("BACKGROUND", (2,idx), (2,idx), colors.HexColor("#F9FAFB")))
+        t.setStyle(TableStyle(web_style))
+        story.append(t)
 
-    append_host_group(
-        f"Current DNS hosts ({len(inventory['live'])})",
-        inventory["live"],
-        "At least one current record was returned from the low-impact DNS inventory.",
-    )
-    append_host_group(
-        f"Historical CT hostnames ({len(inventory['historical'])})",
-        inventory["historical"],
-        "Previously observed in Certificate Transparency, but current DNS returned NXDOMAIN. These names are kept as historical evidence and are not shown in the live DNS appendix.",
-    )
-    append_host_group(
-        f"Currently unresolved hostnames ({len(inventory['unresolved'])})",
-        inventory["unresolved"],
-        "No current A/AAAA/CNAME/MX/TXT/NS/CAA records were returned, but the evidence was not strong enough to classify the name as historical.",
-    )
-    append_host_group(
-        f"DNS status unknown ({len(inventory['dns_unknown'])})",
-        inventory["dns_unknown"],
-        "One or more DNS queries failed (for example timeout or SERVFAIL), so these names are not classified as inactive or historical.",
-    )
-    append_host_group(
-        f"Discovered but not DNS-assessed ({len(inventory['not_assessed'])})",
-        inventory["not_assessed"],
-        "These names were discovered after the configured DNS host limit was reached.",
-    )
+    show_inventory = "discovery" in selected_scan_group_set
+    show_dns_appendix = bool({"domain", "discovery"} & selected_scan_group_set)
+    if show_inventory or show_dns_appendix:
+        story.append(PageBreak())
 
-    story.append(Spacer(1, 8))
-    story.append(Paragraph(
-        f"<b>Public email addresses discovered on crawled pages:</b> {len(report.get('emails', []))}",
-        styles["BodyText"]
-    ))
-    if report.get("emails"):
-        story.append(Paragraph("<br/>".join(p(x) for x in report["emails"]), styles["Small"]))
-    else:
-        story.append(Paragraph("None found.", styles["Small"]))
+    inventory = None
+    if show_inventory:
+        story.append(Paragraph("External inventory", styles["Section"]))
+        inventory = _host_inventory_groups(report)
+        discovered_count = len(report.get("subdomains", []))
+        story.append(Paragraph(
+            f"<b>Subdomains / hosts discovered:</b> {discovered_count} &nbsp; "
+            f"<b>current DNS:</b> {len(inventory['live'])} &nbsp; "
+            f"<b>historical:</b> {len(inventory['historical'])}",
+            styles["BodyText"]
+        ))
 
-    story.append(Paragraph("DNS appendix - current records", styles["Section"]))
-    live_hosts = set(inventory["live"])
-    dns_records = report.get("dns_records", {}) or {}
-    ordered_live_hosts = [host for host in dns_records if host in live_hosts]
-    ordered_live_hosts.extend(sorted(live_hosts - set(ordered_live_hosts)))
+        def append_host_group(title: str, hosts: list[str], note: str | None = None):
+            if not hosts:
+                return
+            story.append(Paragraph(title, styles["Heading3"]))
+            if note:
+                story.append(Paragraph(note, styles["Tiny"]))
+            host_rows = [["Host"]] + [[Paragraph(p(host), styles["Small"])] for host in hosts]
+            ht = Table(host_rows, colWidths=[178*mm], repeatRows=1)
+            ht.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0F172A")),
+                ("TEXTCOLOR",(0,0),(-1,0),colors.white),
+                ("FONTNAME",(0,0),(-1,0),bold_font),
+                ("FONTNAME",(0,1),(-1,-1),regular_font),
+                ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
+                ("FONTSIZE",(0,0),(-1,-1),7),
+                ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ]))
+            story.append(ht)
 
-    if not ordered_live_hosts:
-        story.append(Paragraph("No hosts with current DNS records were confirmed.", styles["Small"]))
+        append_host_group(
+            f"Current DNS hosts ({len(inventory['live'])})",
+            inventory["live"],
+            "At least one current record was returned from the low-impact DNS inventory.",
+        )
+        append_host_group(
+            f"Historical CT hostnames ({len(inventory['historical'])})",
+            inventory["historical"],
+            "Previously observed in Certificate Transparency, but current DNS returned NXDOMAIN. These names are kept as historical evidence and are not shown in the live DNS appendix.",
+        )
+        append_host_group(
+            f"Currently unresolved hostnames ({len(inventory['unresolved'])})",
+            inventory["unresolved"],
+            "No current A/AAAA/CNAME/MX/TXT/NS/CAA records were returned, but the evidence was not strong enough to classify the name as historical.",
+        )
+        append_host_group(
+            f"DNS status unknown ({len(inventory['dns_unknown'])})",
+            inventory["dns_unknown"],
+            "One or more DNS queries failed (for example timeout or SERVFAIL), so these names are not classified as inactive or historical.",
+        )
+        append_host_group(
+            f"Discovered but not DNS-assessed ({len(inventory['not_assessed'])})",
+            inventory["not_assessed"],
+            "These names were discovered after the configured DNS host limit was reached.",
+        )
 
-    for host in ordered_live_hosts:
-        records = dns_records.get(host, {}) or {}
-        block = [Paragraph(f"<b>{p(host)}</b>", styles["BodyText"])]
-        dns_rows = [["Type", "Value"]]
-        for rtype, values in records.items():
-            if values:
-                dns_rows.append([rtype, Paragraph("<br/>".join(p(v) for v in values), styles["Small"])])
-        # A host is only placed in this appendix when current DNS data exists.
-        if len(dns_rows) == 1:
-            continue
-        dt = Table(dns_rows, colWidths=[22*mm, 156*mm], repeatRows=1)
-        dt.setStyle(TableStyle([
-            ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E2E8F0")),
-            ("FONTNAME",(0,0),(-1,0),bold_font),
-            ("FONTNAME",(0,1),(-1,-1),regular_font),
-            ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
-            ("VALIGN",(0,0),(-1,-1),"TOP"),
-            ("FONTSIZE",(0,0),(-1,-1),7)
-        ]))
-        block += [dt, Spacer(1, 6)]
-        story.append(KeepTogether(block))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(
+            f"<b>Public email addresses discovered on crawled pages:</b> {len(report.get('emails', []))}",
+            styles["BodyText"]
+        ))
+        if report.get("emails"):
+            story.append(Paragraph("<br/>".join(p(x) for x in report["emails"]), styles["Small"]))
+        else:
+            story.append(Paragraph("None found.", styles["Small"]))
+
+    if show_dns_appendix:
+        if inventory is None:
+            inventory = _host_inventory_groups(report)
+        story.append(Paragraph("DNS appendix - current records", styles["Section"]))
+        live_hosts = set(inventory["live"])
+        dns_records = report.get("dns_records", {}) or {}
+        ordered_live_hosts = [host for host in dns_records if host in live_hosts]
+        ordered_live_hosts.extend(sorted(live_hosts - set(ordered_live_hosts)))
+
+        if not ordered_live_hosts:
+            story.append(Paragraph("No hosts with current DNS records were confirmed.", styles["Small"]))
+
+        for host in ordered_live_hosts:
+            records = dns_records.get(host, {}) or {}
+            block = [Paragraph(f"<b>{p(host)}</b>", styles["BodyText"])]
+            dns_rows = [["Type", "Value"]]
+            for rtype, values in records.items():
+                if values:
+                    dns_rows.append([rtype, Paragraph("<br/>".join(p(v) for v in values), styles["Small"])])
+            if len(dns_rows) == 1:
+                continue
+            dt = Table(dns_rows, colWidths=[22*mm, 156*mm], repeatRows=1)
+            dt.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E2E8F0")),
+                ("FONTNAME",(0,0),(-1,0),bold_font),
+                ("FONTNAME",(0,1),(-1,-1),regular_font),
+                ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#CBD5E1")),
+                ("VALIGN",(0,0),(-1,-1),"TOP"),
+                ("FONTSIZE",(0,0),(-1,-1),7)
+            ]))
+            block += [dt, Spacer(1, 6)]
+            story.append(KeepTogether(block))
 
     story.append(Paragraph("Limitations", styles["Section"]))
     for item in report.get("limitations", []):

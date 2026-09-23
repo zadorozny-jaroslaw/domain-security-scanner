@@ -6,10 +6,10 @@ from typing import Any, Optional
 
 from bs4 import BeautifulSoup
 
-from .constants import TIMEOUT, USER_AGENT
+from ...constants import TIMEOUT, USER_AGENT
 
 
-class CmsMixin:
+class CmsScanMixin:
     """Passive CMS/platform detection and release-currency checks."""
 
     def detect_cms(self, response, html: str) -> dict[str, Any]:
@@ -186,8 +186,8 @@ class CmsMixin:
     @staticmethod
     def _version_gt(a: str, b: str) -> bool:
         """True when stable version a is newer than stable version b."""
-        ta = CmsMixin._stable_numeric_version(a)
-        tb = CmsMixin._stable_numeric_version(b)
+        ta = CmsScanMixin._stable_numeric_version(a)
+        tb = CmsScanMixin._stable_numeric_version(b)
         if ta is None or tb is None:
             return False
         width = max(len(ta), len(tb))
@@ -199,7 +199,7 @@ class CmsMixin:
     def _max_version(values: list[str]) -> Optional[str]:
         stable = []
         for v in values:
-            t = CmsMixin._stable_numeric_version(v)
+            t = CmsScanMixin._stable_numeric_version(v)
             if t is not None:
                 stable.append((t, v.lstrip("vV")))
         if not stable:

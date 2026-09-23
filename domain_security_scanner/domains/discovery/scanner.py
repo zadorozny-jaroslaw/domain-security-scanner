@@ -6,12 +6,12 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-from .constants import COMMON_DNS_TYPES, EMAIL_RE, TIMEOUT
-from .models import DnsQueryState
-from .utils import is_in_scope_host
+from ...constants import COMMON_DNS_TYPES, EMAIL_RE, TIMEOUT
+from ...models import DnsQueryState
+from ...utils import is_in_scope_host
 
 
-class InventoryMixin:
+class DiscoveryScanMixin:
     """Passive Certificate Transparency discovery, crawling, and host inventory."""
 
     def discover_ct_subdomains(self):

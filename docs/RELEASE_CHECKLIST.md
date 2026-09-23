@@ -15,7 +15,9 @@ Releases are prepared on `develop`, promoted to `main` through a release pull re
 - [ ] Run the test suite on a clean virtual environment.
 - [ ] Run `python domain_security_scan.py --version`.
 - [ ] Run `python -m py_compile domain_security_scan.py` and `python -m compileall domain_security_scanner`.
-- [ ] Run at least one authorized real-world smoke test.
+- [ ] Run at least one authorized default full-scope smoke test.
+- [ ] If scan-group selection/orchestration changed, run authorized partial-scope smoke tests covering `--scan`, `--skip`, and an overlapping `--scan`/`--skip` case.
+- [ ] Confirm partial-scope JSON/PDF output shows the effective scanned/skipped groups and does not render skipped groups as findings or score contributions.
 - [ ] If the report layout changed, regenerate `docs/example-report.pdf` and its preview.
 - [ ] Review generated reports for secrets or data that should not be committed.
 - [ ] Confirm README usage remains accurate.

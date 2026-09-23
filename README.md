@@ -19,6 +19,7 @@ The example below was generated against a maintainer-controlled WordPress test h
 ## Highlights
 
 - Exact web-target checks while registration and mail checks follow the registered/root domain
+- Selectable scan groups for domain, discovery, mail, TLS, web, and CMS checks
 - RDAP, DNSSEC, CAA, nameserver and expiry checks
 - Certificate Transparency subdomain discovery through `crt.sh`
 - DNS inventory with resolver-error awareness, live/historical hostname separation, and same-site crawling
@@ -35,8 +36,8 @@ The example below was generated against a maintainer-controlled WordPress test h
 - Passive CMS/platform fingerprinting and version discovery
 - Live CMS release-currency checks for common CMS platforms
 - Server/framework version-disclosure checks
-- Color-coded PDF findings with short "why it matters" explanations
-- External Security Hygiene Score from 0 to 100
+- Scope-aware PDF findings with short "why it matters" explanations
+- External Security Hygiene Score from 0 to 100 for the effective selected scan scope
 
 ## Requirements
 
@@ -99,18 +100,56 @@ security-report-example.com.json
 ## Usage
 
 ```text
-python domain_security_scan.py DOMAIN --authorized [--max-pages N] [--max-hosts N] [--out PREFIX]
+python domain_security_scan.py DOMAIN --authorized [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX]
 ```
 
 Examples:
 
 ```bash
+# Default: run all six scan groups
 python domain_security_scan.py shop.example.com --authorized
+
+# Run only selected groups
+python domain_security_scan.py example.com --authorized --scan mail,web
+
+# Run the default full scan except selected groups
+python domain_security_scan.py example.com --authorized --skip discovery,cms
+
+# --skip wins when the same group appears in both lists
+python domain_security_scan.py example.com --authorized --scan mail,web --skip mail
+
 python domain_security_scan.py example.com --authorized --max-pages 15 --max-hosts 20
 python domain_security_scan.py example.com --authorized --out customer-example
 ```
 
 The `--authorized` flag is deliberately mandatory.
+
+## Scan groups
+
+The public scan groups are:
+
+| Group | Main responsibility |
+| --- | --- |
+| `domain` | registered/root-domain posture: RDAP, expiry, registrar, nameservers, DNSSEC, CAA |
+| `discovery` | external attack-surface discovery: Certificate Transparency, crawl, DNS inventory, live/historical host classification |
+| `mail` | MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT |
+| `tls` | HTTPS certificate, expiry, negotiated TLS/cipher, legacy TLS support |
+| `web` | HTTP redirect, headers, cookies, mixed content, `security.txt`, server disclosure |
+| `cms` | passive CMS/platform detection and release-currency checks |
+
+With neither `--scan` nor `--skip`, all six groups run. `--scan` limits the effective scope to the listed groups. `--skip` removes listed groups from either the default full scope or a `--scan` selection. If both options are present, `--skip` always has higher priority. The CLI warns that the combination may be redundant and prints an additional warning naming any groups present in both lists.
+
+Group names are comma-separated, case-insensitive, and deduplicated. There are currently **no aliases** such as `all` or `infra`; only the six names above are accepted.
+
+Some groups need prerequisite context owned by another group. The orchestrator may collect that context silently without enabling the prerequisite group's findings or score contribution. In particular:
+
+- `domain`, `discovery`, and `mail` share registered/root-domain context from RDAP;
+- `web` and `cms` share a single HTTPS-homepage context fetch;
+- `cms` alone can reuse the HTTPS response without running Web findings.
+
+The effective scope is recorded in JSON as `scan_groups`, while `scan_selection` preserves requested/skip/overlap metadata and CLI selection warnings. The PDF shows the effective scope and hides technical sections for groups that were not selected.
+
+See [docs/SCAN_GROUPS.md](docs/SCAN_GROUPS.md) for the orchestration and prerequisite model.
 
 ## Web target vs registered/root domain
 
@@ -122,7 +161,7 @@ app.eu.example.com
 
 HTTP, HTTPS, TLS, cookie, mixed-content and web-platform checks stay on that host.
 
-The scanner then walks RDAP upward to identify the registered/root domain (for example `example.com`). Registration, expiry, nameserver, DNSSEC and mail-security checks are run against that root domain. If RDAP is unavailable, a conservative fallback is used.
+The scanner then walks RDAP upward to identify the registered/root domain (for example `example.com`) when selected groups need that context. Registration, expiry, nameserver, DNSSEC and mail-security checks use that root domain as appropriate. If RDAP is unavailable, a conservative fallback is used.
 
 This avoids treating a website subdomain as if it were the organization's mail domain.
 
@@ -206,7 +245,9 @@ WARN and FAIL findings include a short **Why it matters** explanation. The wordi
 
 The score is intentionally named **External Security Hygiene Score**, not a general "security score."
 
-Only applicable weighted checks contribute to the denominator. Unknown/unverifiable checks are excluded rather than penalized. DNS timeouts, SERVFAIL responses and resolver errors are treated as unavailable evidence rather than as proof that a record is absent. Several useful findings - including CMS release currency - are informational or advisory and intentionally have no score weight.
+Only applicable weighted checks from the **effective selected scan groups** contribute to the denominator. Findings produced only as prerequisite context for an unselected group are suppressed and cannot affect the score. Unknown/unverifiable checks are excluded rather than penalized. DNS timeouts, SERVFAIL responses and resolver errors are treated as unavailable evidence rather than as proof that a record is absent. Several useful findings - including CMS release currency - are informational or advisory and intentionally have no score weight.
+
+Scores from different scan scopes are not directly comparable. For example, a Web-only score intentionally excludes positive and negative TLS, Mail, Domain, Discovery, and CMS findings that would participate in a full scan.
 
 See [docs/SCORING.md](docs/SCORING.md) for the scoring philosophy.
 
@@ -214,7 +255,7 @@ See [docs/SCORING.md](docs/SCORING.md) for the scoring philosophy.
 
 The scanner talks to the target and to a small number of public infrastructure/release services, including RDAP sources, `crt.sh`, and upstream CMS release sources. No API keys are required for the default checks.
 
-Before using the scanner in a privacy-sensitive environment, read [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md), which documents what is queried externally.
+Selected scan groups control which checks run, although prerequisite context may require a limited request owned by another group. Before using the scanner in a privacy-sensitive environment, read [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md), which documents what is queried externally.
 
 ## Safety and scope
 
@@ -244,15 +285,16 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
 - Passive CMS detection can miss intentionally hidden or heavily proxied platforms.
+- Partial-scope scores summarize only the selected groups and should not be interpreted as equivalent to a full-scan score.
 
 See [`docs/STANDARDS.md`](docs/STANDARDS.md) for the RFC/standards registry and the exact standards-backed checks implemented by the scanner.
 
 ## Project structure
 
-The scanner is organized as a Python package while keeping `domain_security_scan.py` as the backward-compatible command-line entry point. Existing report fields and CLI arguments remain compatible; new evidence can be added through additive JSON fields such as `host_inventory`.
+The scanner is organized as a Python package while keeping `domain_security_scan.py` as the command-line entry point. The six functional scan groups live under `domain_security_scanner/domains/`; selection policy and prerequisite ordering are centralized in `orchestration.py`.
 
 ```text
-domain_security_scan.py              # compatibility CLI entry point
+domain_security_scan.py              # CLI entry point
 domain_security_scanner/
 ├── __init__.py                       # public package API
 ├── version.py                        # scanner version
@@ -260,23 +302,28 @@ domain_security_scanner/
 ├── models.py                         # typed check/status/category/score result models
 ├── utils.py                          # domain/date helper functions
 ├── base.py                           # shared Scanner state
-├── rdap.py                           # RDAP/domain checks
-├── dns_mail.py                       # DNS and mail-security checks
-├── inventory.py                      # CT discovery, crawl, DNS inventory
-├── web_tls.py                        # HTTP/TLS/cookie/header checks
-├── cms.py                            # passive CMS detection/currency checks
-├── scanner.py                        # scan orchestration and scoring
+├── orchestration.py                  # scan-group order, selection, prerequisites, execution plan
+├── scanner.py                        # Scanner composition, execution, scoring, serialization
 ├── cli.py                            # argument parsing and output handling
+├── domains/
+│   ├── domain/                       # RDAP and authoritative/root DNS posture
+│   ├── discovery/                    # CT discovery, crawl, DNS host inventory
+│   ├── mail/                         # MX/SPF/DMARC/DKIM/MTA-STS/TLS-RPT
+│   ├── tls/                          # certificate and TLS protocol checks
+│   ├── web/                          # HTTP, headers, cookies, mixed content, security.txt
+│   └── cms/                          # passive CMS detection and release currency
 ├── standards/
 │   ├── __init__.py                   # standards package exports
 │   ├── registry.py                   # RFC metadata/reference registry
 │   └── mail.py                       # mail-standard parsing/validation helpers
 └── reporting/
     ├── __init__.py
-    └── pdf.py                        # PDF rendering
+    └── pdf.py                        # scope-aware PDF rendering
 ```
 
-This layout is intended to make later changes easier to isolate. Shared result models validate check categories/statuses centrally while preserving the existing JSON representation. For example, report rendering can evolve without mixing PDF code into DNS or TLS checks, while the top-level script remains compatible with the existing documented commands.
+This layout isolates functional checks from orchestration and reporting. `domain_security_scanner.orchestration` defines the canonical public group order and prerequisite execution plan, while `Scanner` composes the group mixins and suppresses findings owned by unselected prerequisite groups.
+
+See [docs/SCAN_GROUPS.md](docs/SCAN_GROUPS.md) for the detailed architecture.
 
 ## Contributing
 
