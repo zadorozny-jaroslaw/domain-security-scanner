@@ -532,68 +532,18 @@ class DnsMailMixin:
             )
 
     def collect_dns(self):
-        # Registration/domain and mail checks always use the registered root domain.
-        # Web checks continue to use the exact target host supplied by the user.
-        root = {}
+        """Preserve the existing combined DNS scan behavior during extraction."""
+        self.collect_domain_dns()
+        self.collect_mail_dns()
+
+    def collect_mail_dns(self):
+        """Run mail-security DNS checks using cached domain DNS evidence when present."""
+        root = self.dns_records.setdefault(self.root_domain, {})
         root_results: dict[str, DnsQueryResult] = {}
-        for rt in COMMON_DNS_TYPES:
+        for rt in ("MX", "TXT"):
             result = self.dns_query_result(self.root_domain, rt)
             root_results[rt] = result
             root[rt] = list(result.records)
-        ds_result = self.dns_query_result(self.root_domain, "DS")
-        root_results["DS"] = ds_result
-        root["DS"] = list(ds_result.records)
-        self.dns_records[self.root_domain] = root
-
-        target_results: dict[str, DnsQueryResult] = {}
-        if self.target_domain != self.root_domain:
-            target = {}
-            for rt in COMMON_DNS_TYPES:
-                result = self.dns_query_result(self.target_domain, rt)
-                target_results[rt] = result
-                target[rt] = list(result.records)
-            self.dns_records[self.target_domain] = target
-
-        ds = root["DS"]
-        rdap_signed = self.rdap.get("dnssec_rdap")
-        if ds or rdap_signed is True:
-            self.add_check("Domain", "DNSSEC", "pass",
-                           f"Wykryto delegację DNSSEC dla {self.root_domain}.", 7, 7)
-        elif ds_result.failed:
-            self.add_check(
-                "Domain", "DNSSEC", "unknown",
-                f"Nie można wiarygodnie ocenić DNSSEC: zapytanie DS zakończyło się "
-                f"błędem ({self._dns_unavailable_message(ds_result)}).",
-                7, 0, False
-            )
-        else:
-            self.add_check("Domain", "DNSSEC", "warn",
-                           f"Nie wykryto delegacji DNSSEC dla {self.root_domain}.", 7, 0)
-
-        # CAA can exist at the exact host; if absent, CA processing walks upward.
-        root_caa_result = root_results["CAA"]
-        target_caa_result = (
-            target_results.get("CAA")
-            if self.target_domain != self.root_domain
-            else None
-        )
-        target_caa = list(target_caa_result.records) if target_caa_result else []
-        caa = target_caa or root.get("CAA", [])
-        self.rdap["caa_source"] = self.target_domain if target_caa else self.root_domain
-        if caa:
-            self.add_check("Domain", "CAA", "pass",
-                           f"Wykryto {len(caa)} rekord(y) CAA (źródło: {self.rdap['caa_source']}).", 3, 3)
-        elif root_caa_result.failed or (target_caa_result and target_caa_result.failed):
-            failed = target_caa_result if target_caa_result and target_caa_result.failed else root_caa_result
-            self.add_check(
-                "Domain", "CAA", "unknown",
-                f"Nie można wiarygodnie potwierdzić braku CAA: zapytanie DNS zakończyło się "
-                f"błędem ({self._dns_unavailable_message(failed)}).",
-                3, 0, False
-            )
-        else:
-            self.add_check("Domain", "CAA", "warn",
-                           "Brak rekordu CAA na hoście docelowym i domenie bazowej.", 3, 0)
 
         # MAIL SECURITY: always root domain, even if the website is on a subdomain.
         self.mail["domain"] = self.root_domain
