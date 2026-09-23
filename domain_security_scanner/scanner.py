@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from .base import BaseScanner
-from .cms import CmsMixin
+from .domains.cms import CmsScanMixin
 from .domains.discovery import DiscoveryScanMixin
 from .domains.domain import DomainScanMixin
 from .domains.mail import MailScanMixin
@@ -13,7 +13,7 @@ from .models import ScoreResult
 from .version import __version__
 
 
-class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, WebScanMixin, CmsMixin, BaseScanner):
+class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, WebScanMixin, CmsScanMixin, BaseScanner):
     """Orchestrates the existing scanner modules without changing scan behavior."""
 
     def run(self):
