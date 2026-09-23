@@ -6,6 +6,21 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add selectable scan groups for `domain`, `discovery`, `mail`, `tls`, `web`, and `cms` through `--scan` and `--skip`.
+- Add scan-scope metadata to JSON reports, including requested, skipped, overlapping, effective groups, and selection warnings.
+- Add scan-scope and overlap/selection warnings to the PDF report.
+
+### Changed
+
+- Split scanner behavior into six functional group packages under `domain_security_scanner/domains/` and centralize selection, prerequisite, and execution ordering in `domain_security_scanner/orchestration.py`.
+- Make `--skip` higher priority than `--scan` when both options are supplied; overlapping groups are explicitly reported and not scanned.
+- Keep prerequisite context available without emitting findings or score contribution for unselected groups.
+- Make PDF technical sections scope-aware so skipped groups are not rendered as unverified or missing.
+- Scope the External Security Hygiene Score to applicable weighted findings from the effective selected groups; scores from different scopes are therefore not directly comparable.
+- Remove transitional flat mixin compatibility modules after the CLI and `Scanner` moved fully to the grouped package layout.
+
 ## [1.1.0] - 2026-09-18
 
 ### Added

@@ -5,6 +5,7 @@ import unittest
 
 from domain_security_scanner.cli import _parse_group_list, _resolve_scan_groups
 from domain_security_scanner.orchestration import build_scan_plan, normalize_scan_groups
+from domain_security_scanner.reporting.pdf import REPORT_SCAN_GROUPS, _report_scan_scope
 from domain_security_scanner.scanner import SCAN_GROUPS, Scanner
 
 
@@ -38,15 +39,46 @@ class ScanGroupCliTest(unittest.TestCase):
         self.assertIn("mail", warnings_list[1])
         self.assertIn("will NOT be scanned", warnings_list[1])
 
+    def test_scan_and_skip_without_overlap_only_warns_about_redundancy(self):
+        selected, warnings_list = _resolve_scan_groups(
+            ("mail", "web"),
+            ("cms",),
+        )
+        self.assertEqual(selected, ("mail", "web"))
+        self.assertEqual(len(warnings_list), 1)
+        self.assertIn("--skip has higher priority", warnings_list[0])
+
+    def test_skip_all_groups_warns_when_no_scope_remains(self):
+        selected, warnings_list = _resolve_scan_groups(None, SCAN_GROUPS)
+        self.assertEqual(selected, ())
+        self.assertEqual(len(warnings_list), 1)
+        self.assertIn("No scan groups remain selected", warnings_list[0])
+
+    def test_overlap_can_remove_entire_requested_scope(self):
+        selected, warnings_list = _resolve_scan_groups(("mail",), ("mail",))
+        self.assertEqual(selected, ())
+        self.assertEqual(len(warnings_list), 3)
+        self.assertIn("--skip has higher priority", warnings_list[0])
+        self.assertIn("mail", warnings_list[1])
+        self.assertIn("No scan groups remain selected", warnings_list[2])
+
     def test_group_list_is_case_insensitive_and_deduplicated(self):
         self.assertEqual(
             _parse_group_list(" MAIL,web,mail "),
             ("mail", "web"),
         )
 
+    def test_group_list_rejects_empty_value(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            _parse_group_list(" , ")
+
     def test_group_aliases_are_not_accepted(self):
         with self.assertRaises(argparse.ArgumentTypeError):
             _parse_group_list("all")
+
+    def test_unknown_group_is_rejected(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            _parse_group_list("web,unknown")
 
 
 class ScanOrchestrationPlanTest(unittest.TestCase):
@@ -68,6 +100,42 @@ class ScanOrchestrationPlanTest(unittest.TestCase):
             ],
         )
         self.assertEqual(plan[-2].call_kwargs(), {"run_web_checks": True})
+
+    def test_each_individual_group_has_expected_plan(self):
+        expected = {
+            "domain": [
+                ("domain", "rdap_lookup"),
+                ("domain", "collect_domain_dns"),
+            ],
+            "discovery": [
+                ("domain", "rdap_lookup"),
+                ("discovery", "discover_ct_subdomains"),
+                ("discovery", "crawl"),
+                ("discovery", "collect_subdomain_dns"),
+            ],
+            "mail": [
+                ("domain", "rdap_lookup"),
+                ("mail", "collect_mail_dns"),
+            ],
+            "tls": [
+                ("tls", "check_tls"),
+            ],
+            "web": [
+                ("web", "check_http"),
+            ],
+            "cms": [
+                ("web", "check_http"),
+                ("cms", "check_cms_currency"),
+            ],
+        }
+
+        for group, expected_steps in expected.items():
+            with self.subTest(group=group):
+                plan = build_scan_plan((group,))
+                self.assertEqual(
+                    [(step.active_group, step.method_name) for step in plan],
+                    expected_steps,
+                )
 
     def test_web_and_cms_share_one_http_context_step(self):
         plan = build_scan_plan(("web", "cms"))
@@ -95,6 +163,10 @@ class ScanOrchestrationPlanTest(unittest.TestCase):
             normalize_scan_groups(("web", "domain", "web", "mail")),
             ("domain", "mail", "web"),
         )
+
+    def test_normalize_scan_groups_rejects_unknown_group(self):
+        with self.assertRaises(ValueError):
+            normalize_scan_groups(("web", "unknown"))
 
 
 class ScannerGroupGatingTest(unittest.TestCase):
@@ -198,6 +270,40 @@ class ScannerGroupGatingTest(unittest.TestCase):
 
         self.assertEqual([check.name for check in instance.checks], ["selected"])
 
+    def test_skipped_prerequisite_findings_do_not_affect_score(self):
+        instance = Scanner("example.com", scan_groups=("mail",))
+
+        instance._run_group_step(
+            "domain",
+            instance.add_check,
+            "Domain",
+            "hidden prerequisite",
+            "fail",
+            "must not affect score",
+            10,
+            0,
+        )
+        instance._run_group_step(
+            "mail",
+            instance.add_check,
+            "Mail",
+            "selected check",
+            "pass",
+            "counts toward score",
+            2,
+            2,
+        )
+
+        self.assertEqual(
+            instance.score(),
+            {
+                "score": 100,
+                "label": "Strong",
+                "earned_points": 2,
+                "possible_points": 2,
+            },
+        )
+
     def test_scan_selection_metadata_preserves_cli_intent(self):
         instance = Scanner("example.com", scan_groups=("web",))
         warnings_list = [
@@ -218,6 +324,47 @@ class ScannerGroupGatingTest(unittest.TestCase):
         self.assertEqual(report["scan_selection"]["overlap"], ["mail"])
         self.assertEqual(report["scan_selection"]["effective"], ["web"])
         self.assertEqual(report["scan_selection"]["warnings"], warnings_list)
+
+
+class ReportScanScopeTest(unittest.TestCase):
+    def test_legacy_report_without_scan_groups_renders_as_full_scope(self):
+        selected, skipped, warnings_list = _report_scan_scope({})
+        self.assertEqual(selected, REPORT_SCAN_GROUPS)
+        self.assertEqual(skipped, ())
+        self.assertEqual(warnings_list, ())
+
+    def test_report_scope_uses_effective_groups_and_selection_warnings(self):
+        report = {
+            "scan_groups": ["web"],
+            "scan_selection": {
+                "warnings": [
+                    "Both --scan and --skip were provided.",
+                    "mail will NOT be scanned.",
+                ]
+            },
+        }
+
+        selected, skipped, warnings_list = _report_scan_scope(report)
+
+        self.assertEqual(selected, ("web",))
+        self.assertEqual(
+            skipped,
+            ("domain", "discovery", "mail", "tls", "cms"),
+        )
+        self.assertEqual(
+            warnings_list,
+            (
+                "Both --scan and --skip were provided.",
+                "mail will NOT be scanned.",
+            ),
+        )
+
+    def test_explicit_empty_scope_is_not_treated_as_legacy_full_scan(self):
+        selected, skipped, warnings_list = _report_scan_scope({"scan_groups": []})
+        self.assertEqual(selected, ())
+        self.assertEqual(skipped, REPORT_SCAN_GROUPS)
+        self.assertEqual(warnings_list, ())
+
 
 
 class CmsPrerequisiteHttpTest(unittest.TestCase):
