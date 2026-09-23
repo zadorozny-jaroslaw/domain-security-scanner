@@ -8,9 +8,10 @@ The registry is intentionally small. It is not a general RFC database and does n
 
 | Standard | Scanner coverage | Canonical reference |
 | --- | --- | --- |
-| RFC 3986 | URI/URI-reference validation used by redirects and `security.txt` fields | https://www.rfc-editor.org/info/rfc3986 |
+| RFC 3986 | URI/URI-reference validation used by redirects, Web Linking, and `security.txt` fields | https://www.rfc-editor.org/info/rfc3986 |
 | RFC 6797 | HSTS syntax, required `max-age`, duplicate directives, active/inactive policy | https://www.rfc-editor.org/info/rfc6797 |
 | RFC 7505 | Null MX detection and validation | https://www.rfc-editor.org/info/rfc7505 |
+| RFC 8288 | HTTP `Link` header serialization, relation types, targets, contexts and selected target attributes | https://www.rfc-editor.org/info/rfc8288 |
 | RFC 8460 | TLS-RPT TXT policy, `rua` destinations and extension handling | https://www.rfc-editor.org/info/rfc8460 |
 | RFC 8461 | MTA-STS TXT indicator, HTTPS policy, modes and MX-pattern coverage | https://www.rfc-editor.org/info/rfc8461 |
 | RFC 8615 | `/.well-known/` location used by `security.txt` | https://www.rfc-editor.org/info/rfc8615 |
@@ -41,6 +42,26 @@ It validates the policy structure used by RFC 6797, including:
 - more than one server-sent STS field being reported as invalid server output.
 
 A syntactically valid `max-age=0` policy is recognized as valid protocol syntax but is reported as an inactive HSTS policy because it instructs user agents to remove/disable the cached HSTS policy.
+
+### RFC 8288 — Web Linking
+
+The scanner passively analyzes the HTTP `Link` response header without dereferencing any advertised target. The check is advisory/non-scoring because RFC 8288 does not require every Web response to publish links, and link relations are application-specific.
+
+The analyzer currently covers the externally observable serialization rules that are useful for a low-impact posture scan:
+
+- one or more comma-separated link-values across `Link` response fields;
+- link targets enclosed in `<...>` and validated as RFC 3986 URI-references;
+- relative targets resolved against the final response URL for report evidence only;
+- required `rel` parameter and multiple relation types in one `rel` value;
+- registered relation names plus extension relation types expressed as absolute URIs;
+- relative `anchor` values resolved against the response URL to derive link context;
+- repeated `hreflang`, which RFC 8288 explicitly permits;
+- duplicate `rel`, `media`, `title`, `title*`, or `type` parameters surfaced for review where the RFC specifies later occurrences are ignored;
+- deprecated `rev` surfaced for review;
+- practical media-type syntax validation for the `type` target attribute;
+- unknown extension link parameters retained instead of rejected.
+
+A missing `Link` header is informational. A syntactically valid Link header is also informational. `REVIEW` is emitted only for malformed/ambiguous serialization or deprecated constructs. The scanner never follows Link targets automatically; this intentionally follows RFC 8288's security guidance around trusting and dereferencing links supplied in HTTP headers.
 
 ### RFC 10025 — Cookies: HTTP State Management Mechanism
 

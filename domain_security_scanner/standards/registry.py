@@ -42,6 +42,14 @@ RFC_7505 = StandardReference(
     scope="Mail receiving / Null MX",
 )
 
+RFC_8288 = StandardReference(
+    key="RFC8288",
+    number=8288,
+    title="Web Linking",
+    url="https://www.rfc-editor.org/info/rfc8288",
+    scope="Web / HTTP Link header and link relation serialization",
+)
+
 RFC_8460 = StandardReference(
     key="RFC8460",
     number=8460,
@@ -82,7 +90,6 @@ RFC_9111 = StandardReference(
     scope="Web / HTTP cache policy and response caching metadata",
 )
 
-
 RFC_9116 = StandardReference(
     key="RFC9116",
     number=9116,
@@ -106,6 +113,7 @@ STANDARD_REFERENCES: dict[str, StandardReference] = {
         RFC_3986,
         RFC_6797,
         RFC_7505,
+        RFC_8288,
         RFC_8460,
         RFC_8461,
         RFC_8615,
