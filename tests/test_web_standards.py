@@ -8,9 +8,11 @@ from domain_security_scanner.standards import (
     RFC_6797,
     RFC_8615,
     RFC_9110,
+    RFC_9111,
     RFC_9116,
     RFC_10025,
     analyze_hsts,
+    analyze_http_cache_policy,
     analyze_redirect,
     analyze_security_txt,
     analyze_set_cookie_header,
@@ -26,6 +28,7 @@ class WebStandardRegistryTest(unittest.TestCase):
             RFC_6797,
             RFC_8615,
             RFC_9110,
+            RFC_9111,
             RFC_9116,
             RFC_10025,
         ):
@@ -97,6 +100,83 @@ class HstsRfc6797Test(unittest.TestCase):
         analysis = analyze_hsts(["max-age=100", "max-age=200"])
         self.assertFalse(analysis["valid"])
         self.assertTrue(any("more than one" in error for error in analysis["errors"]))
+
+
+class HttpCacheRfc9111Test(unittest.TestCase):
+    def test_missing_cache_policy_is_informational_not_invalid(self):
+        analysis = analyze_http_cache_policy()
+        self.assertFalse(analysis["present"])
+        self.assertTrue(analysis["valid"])
+        self.assertFalse(analysis["review"])
+        self.assertEqual(analysis["freshness_source"], "heuristic/unspecified")
+
+    def test_valid_max_age_policy(self):
+        analysis = analyze_http_cache_policy(["public, max-age=300"])
+        self.assertTrue(analysis["valid"])
+        self.assertFalse(analysis["review"])
+        self.assertTrue(analysis["public"])
+        self.assertEqual(analysis["max_age"], 300)
+        self.assertEqual(analysis["freshness_source"], "max-age")
+
+    def test_unknown_extension_directive_is_accepted(self):
+        analysis = analyze_http_cache_policy(["max-age=60, immutable"])
+        self.assertTrue(analysis["valid"])
+        self.assertFalse(analysis["review"])
+        self.assertEqual(analysis["unknown_directives"], ["immutable"])
+
+    def test_quoted_max_age_is_invalid_server_output(self):
+        analysis = analyze_http_cache_policy(['max-age="60"'])
+        self.assertFalse(analysis["valid"])
+        self.assertTrue(analysis["review"])
+        self.assertTrue(any("unquoted" in error for error in analysis["errors"]))
+
+    def test_duplicate_freshness_directive_is_reviewed(self):
+        analysis = analyze_http_cache_policy(["max-age=60, max-age=120"])
+        self.assertTrue(analysis["valid"])
+        self.assertTrue(analysis["review"])
+        self.assertEqual(analysis["duplicate_directives"], ["max-age"])
+
+    def test_conflicting_no_cache_and_max_age_uses_restrictive_semantics(self):
+        analysis = analyze_http_cache_policy(["max-age=60, no-cache"])
+        self.assertTrue(analysis["valid"])
+        self.assertTrue(analysis["no_cache"])
+        self.assertTrue(any("more restrictive" in warning for warning in analysis["warnings"]))
+
+    def test_qualified_private_preserves_quoted_field_list(self):
+        analysis = analyze_http_cache_policy(['private="Set-Cookie, X-Private", max-age=0'])
+        self.assertTrue(analysis["valid"])
+        self.assertFalse(analysis["review"])
+        self.assertEqual(analysis["directives"]["private"], ["Set-Cookie, X-Private"])
+
+    def test_invalid_age_is_reviewed(self):
+        analysis = analyze_http_cache_policy(age_values=["not-a-number"])
+        self.assertFalse(analysis["valid"])
+        self.assertTrue(any("Age" in error for error in analysis["errors"]))
+
+    def test_multiple_age_values_use_first_member_and_warn(self):
+        analysis = analyze_http_cache_policy(age_values=["12, 20"])
+        self.assertTrue(analysis["valid"])
+        self.assertEqual(analysis["age"], 12)
+        self.assertTrue(any("multiple Age" in warning for warning in analysis["warnings"]))
+
+    def test_invalid_expires_is_treated_as_expired_and_reviewed(self):
+        analysis = analyze_http_cache_policy(expires_values=["0"])
+        self.assertTrue(analysis["valid"])
+        self.assertFalse(analysis["expires_valid"])
+        self.assertEqual(analysis["freshness_source"], "expires-invalid")
+        self.assertTrue(any("already expired" in warning for warning in analysis["warnings"]))
+
+    def test_response_pragma_is_deprecated(self):
+        analysis = analyze_http_cache_policy(pragma_values=["no-cache"])
+        self.assertTrue(analysis["valid"])
+        self.assertTrue(analysis["review"])
+        self.assertTrue(any("deprecated" in warning for warning in analysis["warnings"]))
+
+    def test_warning_response_header_is_obsoleted(self):
+        analysis = analyze_http_cache_policy(warning_values=['110 - "Response is stale"'])
+        self.assertTrue(analysis["valid"])
+        self.assertTrue(analysis["review"])
+        self.assertTrue(any("obsoleted" in warning for warning in analysis["warnings"]))
 
 
 class SecurityTxtRfc9116Test(unittest.TestCase):

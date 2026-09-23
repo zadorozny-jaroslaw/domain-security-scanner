@@ -9,9 +9,11 @@ from ...constants import SECURITY_HEADERS, TIMEOUT
 from ...standards import (
     RFC_6797,
     RFC_9110,
+    RFC_9111,
     RFC_9116,
     RFC_10025,
     analyze_hsts,
+    analyze_http_cache_policy,
     analyze_redirect,
     analyze_security_txt,
     analyze_set_cookie_header,
@@ -209,6 +211,50 @@ class WebScanMixin:
 
             headers_l = {k.lower(): v for k, v in r.headers.items()}
 
+            # RFC 9111 cache metadata. This is advisory/non-scoring: the scanner
+            # validates syntax and ambiguity without assuming every page should
+            # be cacheable or non-cacheable.
+            cache_analysis = analyze_http_cache_policy(
+                self._header_values(r, "Cache-Control"),
+                expires_values=self._header_values(r, "Expires"),
+                age_values=self._header_values(r, "Age"),
+                pragma_values=self._header_values(r, "Pragma"),
+                warning_values=self._header_values(r, "Warning"),
+            )
+            result["cache"] = cache_analysis
+            cache_review = cache_analysis["errors"] + cache_analysis["warnings"]
+            if cache_review:
+                self.add_check(
+                    "Web", "HTTP cache policy", "warn",
+                    f"Metadane cache wymagają przeglądu wg {RFC_9111.label}: "
+                    + "; ".join(cache_review[:3]) + ".",
+                    0, 0, False,
+                )
+            elif cache_analysis["present"]:
+                details = []
+                if cache_analysis["no_store"]:
+                    details.append("no-store")
+                if cache_analysis["private"]:
+                    details.append("private")
+                if cache_analysis["no_cache"]:
+                    details.append("no-cache")
+                if cache_analysis["s_maxage"] is not None:
+                    details.append(f"s-maxage={cache_analysis['s_maxage']}")
+                elif cache_analysis["max_age"] is not None:
+                    details.append(f"max-age={cache_analysis['max_age']}")
+                summary = ", ".join(details) or cache_analysis["freshness_source"]
+                self.add_check(
+                    "Web", "HTTP cache policy", "info",
+                    f"Metadane cache są syntaktycznie spójne wg {RFC_9111.label} ({summary}).",
+                    0, 0, False,
+                )
+            else:
+                self.add_check(
+                    "Web", "HTTP cache policy", "info",
+                    f"Brak jawnych nagłówków polityki cache; {RFC_9111.label} dopuszcza heurystyczne cache'owanie części odpowiedzi.",
+                    0, 0, False,
+                )
+
             # Cookie flags. RFC 10025 violations and sensitive/session hardening
             # gaps generate WARN findings; non-sensitive cookies remain inventory.
             cookie_analysis = self._analyze_cookies(r)
@@ -346,6 +392,14 @@ class WebScanMixin:
             }
             result["mixed_content"] = sorted(self.crawl_mixed_content)
             result["server_disclosure"] = {"headers": {}, "exact_version": False}
+            result["cache"] = {
+                "present": False,
+                "cache_control_present": False,
+                "valid": False,
+                "review": False,
+                "errors": [],
+                "warnings": [],
+            }
 
         # security.txt - informational/advisory only, but validate RFC 9116 when present.
         if run_web_checks:

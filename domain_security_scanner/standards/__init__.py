@@ -16,6 +16,7 @@ from .registry import (
     RFC_8461,
     RFC_8615,
     RFC_9110,
+    RFC_9111,
     RFC_9116,
     RFC_10025,
     STANDARD_REFERENCES,
@@ -24,6 +25,7 @@ from .registry import (
 )
 from .web import (
     analyze_hsts,
+    analyze_http_cache_policy,
     analyze_redirect,
     analyze_security_txt,
     analyze_set_cookie_header,
@@ -41,6 +43,7 @@ __all__ = [
     "RFC_8461",
     "RFC_8615",
     "RFC_9110",
+    "RFC_9111",
     "RFC_9116",
     "RFC_10025",
     "analyze_mx_records",
@@ -50,6 +53,7 @@ __all__ = [
     "mta_sts_mx_matches",
     "analyze_mta_sts_mx_coverage",
     "analyze_hsts",
+    "analyze_http_cache_policy",
     "analyze_redirect",
     "analyze_security_txt",
     "analyze_set_cookie_header",

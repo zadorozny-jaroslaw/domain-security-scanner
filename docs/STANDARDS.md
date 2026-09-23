@@ -15,6 +15,7 @@ The registry is intentionally small. It is not a general RFC database and does n
 | RFC 8461 | MTA-STS TXT indicator, HTTPS policy, modes and MX-pattern coverage | https://www.rfc-editor.org/info/rfc8461 |
 | RFC 8615 | `/.well-known/` location used by `security.txt` | https://www.rfc-editor.org/info/rfc8615 |
 | RFC 9110 | HTTP redirect status and `Location` semantics | https://www.rfc-editor.org/info/rfc9110 |
+| RFC 9111 | HTTP cache-policy syntax, freshness metadata, ambiguity and deprecated response `Pragma` | https://www.rfc-editor.org/info/rfc9111 |
 | RFC 9116 | `security.txt` location, media type, required fields and expiry | https://www.rfc-editor.org/info/rfc9116 |
 | RFC 10025 | `Set-Cookie` syntax/security semantics, SameSite and secure cookie prefixes | https://www.rfc-editor.org/info/rfc10025 |
 
@@ -60,6 +61,24 @@ RFC-backed validation currently checks:
 The existing scanner policy still recommends `Secure`, `HttpOnly`, and an explicit `SameSite` value for cookies heuristically identified as session/authentication sensitive. Those recommendations are intentionally described as hardening rather than universal RFC conformance requirements.
 
 RFC 10025 obsoletes RFC 6265, so new scanner references use RFC 10025.
+
+### RFC 9111 — HTTP Caching
+
+The scanner now records and analyzes response caching metadata without assuming that every public page should use a particular cache policy. The check is deliberately advisory and has no score weight.
+
+It parses repeated `Cache-Control` field values and validates the core RFC 9111 response directives, including:
+
+- `max-age` and `s-maxage` as unquoted non-negative delta-seconds;
+- valueless directives such as `no-store`, `public`, and `must-revalidate`;
+- qualified `private` / `no-cache` field-name lists;
+- extension directives, which are retained rather than rejected;
+- duplicate directives and conflicting directives as review-worthy ambiguity, while preserving the RFC rule that the more restrictive semantics apply;
+- `Age` as a non-negative integer, including the RFC behavior of using the first member when multiple values are received;
+- `Expires` as HTTP-date metadata, with malformed dates treated as already expired rather than as proof of unsafe caching;
+- response `Pragma` as deprecated and not a reliable substitute for `Cache-Control`;
+- the legacy `Warning` response field as obsoleted by RFC 9111.
+
+A response with no explicit `Cache-Control` / `Expires` policy remains informational because RFC 9111 permits heuristic freshness in applicable cases. A syntactically consistent policy is also informational rather than scored as a security pass. The scanner reports `REVIEW` only when the observed metadata is malformed, duplicated/ambiguous, contradictory in a way that merits operator review, or relies on deprecated response `Pragma`.
 
 ### RFC 9116 + RFC 8615 + RFC 3986 — `security.txt`
 
