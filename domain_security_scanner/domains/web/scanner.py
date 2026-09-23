@@ -209,6 +209,12 @@ class WebScanMixin:
                 self.http = result
                 return
 
+            capture_response_metadata = getattr(
+                self, "_capture_web_response_metadata", None
+            )
+            if callable(capture_response_metadata):
+                capture_response_metadata(r, result)
+
             headers_l = {k.lower(): v for k, v in r.headers.items()}
 
             # RFC 9111 cache metadata. This is advisory/non-scoring: the scanner

@@ -18,6 +18,7 @@ The registry is intentionally small. It is not a general RFC database and does n
 | RFC 8615 | `/.well-known/` location used by `security.txt` | https://www.rfc-editor.org/info/rfc8615 |
 | RFC 9110 | HTTP redirect status and `Location` semantics | https://www.rfc-editor.org/info/rfc9110 |
 | RFC 9111 | HTTP cache-policy syntax, freshness metadata, ambiguity and deprecated response `Pragma` | https://www.rfc-editor.org/info/rfc9111 |
+| RFC 9112 | Passive HTTP/1.1 response-framing metadata: `Content-Length`, `Transfer-Encoding`, protocol version and framing classification | https://www.rfc-editor.org/info/rfc9112 |
 | RFC 9116 | `security.txt` location, media type, required fields and expiry | https://www.rfc-editor.org/info/rfc9116 |
 | RFC 10025 | `Set-Cookie` syntax/security semantics, SameSite and secure cookie prefixes | https://www.rfc-editor.org/info/rfc10025 |
 
@@ -125,6 +126,28 @@ It parses repeated `Cache-Control` field values and validates the core RFC 9111 
 - the legacy `Warning` response field as obsoleted by RFC 9111.
 
 A response with no explicit `Cache-Control` / `Expires` policy remains informational because RFC 9111 permits heuristic freshness in applicable cases. A syntactically consistent policy is also informational rather than scored as a security pass. The scanner reports `REVIEW` only when the observed metadata is malformed, duplicated/ambiguous, contradictory in a way that merits operator review, or relies on deprecated response `Pragma`.
+
+### RFC 9112 — HTTP/1.1 response framing (passive scope)
+
+The current RFC 9112 coverage is intentionally **partial and passive**. It reuses the primary HTTPS response already fetched by the Web scan and inspects only framing metadata exposed by `requests` / urllib3. It does not create a second request, open a raw socket, send malformed input, pipeline requests, or attempt request-smuggling probes.
+
+When the response version is exposed as HTTP/1.1, the scanner analyzes:
+
+- `Content-Length` as decimal framing metadata;
+- comma-joined or repeated identical `Content-Length` values, which are normalized as one value while remaining visible in evidence;
+- conflicting or malformed `Content-Length` values as `REVIEW`;
+- `Transfer-Encoding` coding order and repeated `chunked`;
+- `Transfer-Encoding` together with `Content-Length` as `REVIEW`, because RFC 9112 gives `Transfer-Encoding` precedence and says the combination ought to be handled as an error;
+- final `chunked` framing versus transfer-coded responses that become close-delimited;
+- responses without either framing field as close-delimited when a body is otherwise allowed;
+- bodyless framing for `HEAD`, `1xx`, `204`, and `304` response semantics;
+- `Transfer-Encoding` observed on HTTP/1.0 as faulty framing under RFC 9112.
+
+A close-delimited HTTP/1.1 response is informational rather than an automatic failure. RFC 9112 permits it for responses, while recommending explicit length/encoding framing when possible because an interrupted close can be difficult to distinguish from successful completion.
+
+This check is non-scoring and reports structured evidence under `http.http1_framing`. It explicitly records that raw wire bytes, status-line/header octet syntax, chunk sizes, chunk extensions, trailer fields, exact body length, premature EOF, extra bytes after the response, and TLS close-notify behavior were **not** verified.
+
+Those wire-level checks are deliberately deferred. They can be revisited later if the project introduces an opt-in raw HTTP/1.1 transport/protocol validation layer during an optimization or refactor cycle.
 
 ### RFC 9116 + RFC 8615 + RFC 3986 — `security.txt`
 

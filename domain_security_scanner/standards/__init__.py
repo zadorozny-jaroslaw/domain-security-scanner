@@ -19,6 +19,7 @@ from .registry import (
     RFC_8615,
     RFC_9110,
     RFC_9111,
+    RFC_9112,
     RFC_9116,
     RFC_10025,
     STANDARD_REFERENCES,
@@ -34,6 +35,7 @@ from .web import (
     is_well_formed_uri_reference,
 )
 from .web_alt_svc import analyze_alt_svc_headers
+from .web_http1 import analyze_http1_response_framing, normalize_http_version
 from .web_linking import analyze_link_headers
 
 __all__ = [
@@ -50,6 +52,7 @@ __all__ = [
     "RFC_8615",
     "RFC_9110",
     "RFC_9111",
+    "RFC_9112",
     "RFC_9116",
     "RFC_10025",
     "analyze_mx_records",
@@ -61,9 +64,11 @@ __all__ = [
     "analyze_alt_svc_headers",
     "analyze_hsts",
     "analyze_http_cache_policy",
+    "analyze_http1_response_framing",
     "analyze_link_headers",
     "analyze_redirect",
     "analyze_security_txt",
     "analyze_set_cookie_header",
     "is_well_formed_uri_reference",
+    "normalize_http_version",
 ]

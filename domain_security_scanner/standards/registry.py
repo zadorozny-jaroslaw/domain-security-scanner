@@ -98,6 +98,14 @@ RFC_9111 = StandardReference(
     scope="Web / HTTP cache policy and response caching metadata",
 )
 
+RFC_9112 = StandardReference(
+    key="RFC9112",
+    number=9112,
+    title="HTTP/1.1",
+    url="https://www.rfc-editor.org/info/rfc9112",
+    scope="Web / passive HTTP/1.1 response framing metadata",
+)
+
 RFC_9116 = StandardReference(
     key="RFC9116",
     number=9116,
@@ -128,6 +136,7 @@ STANDARD_REFERENCES: dict[str, StandardReference] = {
         RFC_8615,
         RFC_9110,
         RFC_9111,
+        RFC_9112,
         RFC_9116,
         RFC_10025,
     )
