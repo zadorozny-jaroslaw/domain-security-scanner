@@ -12,6 +12,7 @@ from .registry import (
     RFC_3986,
     RFC_6797,
     RFC_7505,
+    RFC_7838,
     RFC_8288,
     RFC_8460,
     RFC_8461,
@@ -32,6 +33,7 @@ from .web import (
     analyze_set_cookie_header,
     is_well_formed_uri_reference,
 )
+from .web_alt_svc import analyze_alt_svc_headers
 from .web_linking import analyze_link_headers
 
 __all__ = [
@@ -41,6 +43,7 @@ __all__ = [
     "RFC_3986",
     "RFC_6797",
     "RFC_7505",
+    "RFC_7838",
     "RFC_8288",
     "RFC_8460",
     "RFC_8461",
@@ -55,6 +58,7 @@ __all__ = [
     "parse_mta_sts_policy",
     "mta_sts_mx_matches",
     "analyze_mta_sts_mx_coverage",
+    "analyze_alt_svc_headers",
     "analyze_hsts",
     "analyze_http_cache_policy",
     "analyze_link_headers",

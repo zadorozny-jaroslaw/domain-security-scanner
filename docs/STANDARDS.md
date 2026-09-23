@@ -11,6 +11,7 @@ The registry is intentionally small. It is not a general RFC database and does n
 | RFC 3986 | URI/URI-reference validation used by redirects, Web Linking, and `security.txt` fields | https://www.rfc-editor.org/info/rfc3986 |
 | RFC 6797 | HSTS syntax, required `max-age`, duplicate directives, active/inactive policy | https://www.rfc-editor.org/info/rfc6797 |
 | RFC 7505 | Null MX detection and validation | https://www.rfc-editor.org/info/rfc7505 |
+| RFC 7838 | HTTP `Alt-Svc` syntax, alternative authorities, freshness and persistence parameters | https://www.rfc-editor.org/info/rfc7838 |
 | RFC 8288 | HTTP `Link` header serialization, relation types, targets, contexts and selected target attributes | https://www.rfc-editor.org/info/rfc8288 |
 | RFC 8460 | TLS-RPT TXT policy, `rua` destinations and extension handling | https://www.rfc-editor.org/info/rfc8460 |
 | RFC 8461 | MTA-STS TXT indicator, HTTPS policy, modes and MX-pattern coverage | https://www.rfc-editor.org/info/rfc8461 |
@@ -42,6 +43,30 @@ It validates the policy structure used by RFC 6797, including:
 - more than one server-sent STS field being reported as invalid server output.
 
 A syntactically valid `max-age=0` policy is recognized as valid protocol syntax but is reported as an inactive HSTS policy because it instructs user agents to remove/disable the cached HSTS policy.
+
+### RFC 7838 — HTTP Alternative Services (`Alt-Svc`)
+
+The scanner passively analyzes the HTTP `Alt-Svc` response header without connecting to any advertised alternative service. The check is advisory/non-scoring: RFC 7838 makes alternative services optional, and the scanner cannot safely establish the advertised service's authority without actually opening a connection and validating it for the original origin.
+
+The analyzer covers the externally observable `Alt-Svc` serialization defined by RFC 7838, including:
+
+- the special case-sensitive `clear` value and invalid `clear`/alternative mixtures;
+- multiple alternatives in server preference order;
+- ALPN `protocol-id` token syntax, including canonical uppercase percent-encoding and the rule against percent-encoding token characters unnecessarily;
+- quoted `alt-authority` values containing an optional host plus a required port;
+- same-host shorthand such as `h3=":443"`, where the origin host is inherited;
+- bracketed IPv6 alternative hosts;
+- internationalized hostnames requiring ASCII A-label form;
+- `ma` as an unquoted non-negative delta-seconds value, with RFC 7838's default freshness lifetime of 24 hours when it is absent;
+- response `Age`, when already available from the RFC 9111 cache analysis, to show the remaining advertised freshness lifetime;
+- `persist=1`, while other `persist` values are retained as review evidence and treated as ignored;
+- unknown extension parameters, which RFC 7838 requires recipients to ignore rather than reject.
+
+A missing `Alt-Svc` header is informational. A well-formed advertisement is also informational. `REVIEW` is emitted only for malformed or ambiguous serialization, non-canonical protocol identifiers, unusable authority data, or parameter values that RFC 7838 says cannot be applied as advertised.
+
+The scanner records host changes because RFC 7838 treats alternative services as authoritative for the original origin only when the client has reasonable assurance that the alternative is valid for that origin. This implementation deliberately does **not** connect to the advertised host, negotiate its ALPN protocol, or validate its certificate. Structured evidence therefore includes `alternatives_contacted: false`.
+
+This check covers the HTTP `Alt-Svc` response field only. It does not inspect HTTP/2 `ALTSVC` frames or validate client-sent `Alt-Used` request fields.
 
 ### RFC 8288 — Web Linking
 

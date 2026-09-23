@@ -42,6 +42,14 @@ RFC_7505 = StandardReference(
     scope="Mail receiving / Null MX",
 )
 
+RFC_7838 = StandardReference(
+    key="RFC7838",
+    number=7838,
+    title="HTTP Alternative Services",
+    url="https://www.rfc-editor.org/info/rfc7838",
+    scope="Web / Alt-Svc alternative service advertisements",
+)
+
 RFC_8288 = StandardReference(
     key="RFC8288",
     number=8288,
@@ -113,6 +121,7 @@ STANDARD_REFERENCES: dict[str, StandardReference] = {
         RFC_3986,
         RFC_6797,
         RFC_7505,
+        RFC_7838,
         RFC_8288,
         RFC_8460,
         RFC_8461,
