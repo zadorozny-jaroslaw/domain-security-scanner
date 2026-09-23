@@ -5,8 +5,9 @@ import json
 import sys
 from pathlib import Path
 
+from .orchestration import SCAN_GROUPS, resolve_scan_groups
 from .reporting.pdf import generate_pdf
-from .scanner import SCAN_GROUPS, Scanner
+from .scanner import Scanner
 from .version import __version__
 
 
@@ -37,36 +38,8 @@ def _resolve_scan_groups(
     scan_groups: tuple[str, ...] | None,
     skip_groups: tuple[str, ...] | None,
 ) -> tuple[tuple[str, ...], list[str]]:
-    requested = set(SCAN_GROUPS if scan_groups is None else scan_groups)
-    skipped = set(skip_groups or ())
-    selected = tuple(
-        group for group in SCAN_GROUPS
-        if group in requested and group not in skipped
-    )
-
-    warnings_list: list[str] = []
-    if scan_groups is not None and skip_groups is not None:
-        warnings_list.append(
-            "Both --scan and --skip were provided. --skip has higher priority; "
-            "using both options may be redundant."
-        )
-        overlap = [
-            group for group in SCAN_GROUPS
-            if group in requested and group in skipped
-        ]
-        if overlap:
-            warnings_list.append(
-                "The following scan groups are listed in both --scan and --skip "
-                "and will NOT be scanned: " + ", ".join(overlap) + "."
-            )
-
-    if not selected:
-        warnings_list.append(
-            "No scan groups remain selected; the report will contain context only "
-            "and no scan findings."
-        )
-
-    return selected, warnings_list
+    """Backward-compatible CLI helper delegated to orchestration policy."""
+    return resolve_scan_groups(scan_groups, skip_groups)
 
 
 def main():

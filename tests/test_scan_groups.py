@@ -4,6 +4,7 @@ import argparse
 import unittest
 
 from domain_security_scanner.cli import _parse_group_list, _resolve_scan_groups
+from domain_security_scanner.orchestration import build_scan_plan, normalize_scan_groups
 from domain_security_scanner.scanner import SCAN_GROUPS, Scanner
 
 
@@ -46,6 +47,54 @@ class ScanGroupCliTest(unittest.TestCase):
     def test_group_aliases_are_not_accepted(self):
         with self.assertRaises(argparse.ArgumentTypeError):
             _parse_group_list("all")
+
+
+class ScanOrchestrationPlanTest(unittest.TestCase):
+    def test_default_plan_preserves_existing_execution_order_and_ownership(self):
+        plan = build_scan_plan(SCAN_GROUPS)
+
+        self.assertEqual(
+            [(step.active_group, step.method_name) for step in plan],
+            [
+                ("domain", "rdap_lookup"),
+                ("domain", "collect_domain_dns"),
+                ("mail", "collect_mail_dns"),
+                ("discovery", "discover_ct_subdomains"),
+                ("discovery", "crawl"),
+                ("discovery", "collect_subdomain_dns"),
+                ("tls", "check_tls"),
+                ("web", "check_http"),
+                ("cms", "check_cms_currency"),
+            ],
+        )
+        self.assertEqual(plan[-2].call_kwargs(), {"run_web_checks": True})
+
+    def test_web_and_cms_share_one_http_context_step(self):
+        plan = build_scan_plan(("web", "cms"))
+
+        self.assertEqual(
+            [step.method_name for step in plan],
+            ["check_http", "check_cms_currency"],
+        )
+        self.assertEqual(plan[0].call_kwargs(), {"run_web_checks": True})
+
+    def test_cms_only_uses_http_context_without_web_findings(self):
+        plan = build_scan_plan(("cms",))
+
+        self.assertEqual(
+            [(step.active_group, step.method_name) for step in plan],
+            [("web", "check_http"), ("cms", "check_cms_currency")],
+        )
+        self.assertEqual(plan[0].call_kwargs(), {"run_web_checks": False})
+
+    def test_empty_selection_produces_no_execution_steps(self):
+        self.assertEqual(build_scan_plan(()), ())
+
+    def test_normalize_scan_groups_keeps_canonical_order(self):
+        self.assertEqual(
+            normalize_scan_groups(("web", "domain", "web", "mail")),
+            ("domain", "mail", "web"),
+        )
 
 
 class ScannerGroupGatingTest(unittest.TestCase):

@@ -10,10 +10,13 @@ from .domains.mail import MailScanMixin
 from .domains.tls import TlsScanMixin
 from .domains.web import WebScanMixin
 from .models import ScoreResult
+from .orchestration import (
+    SCAN_GROUPS,
+    build_scan_plan,
+    build_scan_selection_context,
+    normalize_scan_groups,
+)
 from .version import __version__
-
-
-SCAN_GROUPS = ("domain", "discovery", "mail", "tls", "web", "cms")
 
 
 class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, WebScanMixin, CmsScanMixin, BaseScanner):
@@ -29,31 +32,8 @@ class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, 
         self._active_scan_group = None
         super().__init__(domain, max_pages=max_pages, max_hosts=max_hosts)
 
-        if scan_groups is None:
-            requested = SCAN_GROUPS
-        elif isinstance(scan_groups, str):
-            requested = (scan_groups,)
-        else:
-            requested = tuple(scan_groups)
-
-        unknown = sorted(set(requested) - set(SCAN_GROUPS))
-        if unknown:
-            raise ValueError(
-                "Unknown scan group(s): "
-                + ", ".join(unknown)
-                + ". Valid groups: "
-                + ", ".join(SCAN_GROUPS)
-            )
-
-        requested_set = set(requested)
-        self.scan_groups = tuple(group for group in SCAN_GROUPS if group in requested_set)
-        self.scan_selection = {
-            "requested": None,
-            "skipped": [],
-            "overlap": [],
-            "effective": list(self.scan_groups),
-            "warnings": [],
-        }
+        self.scan_groups = normalize_scan_groups(scan_groups)
+        self.scan_selection = build_scan_selection_context(self.scan_groups)
 
     def set_scan_selection_context(
         self,
@@ -61,21 +41,12 @@ class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, 
         skipped=None,
         warnings_list=None,
     ) -> None:
-        requested_tuple = None if requested is None else tuple(requested)
-        skipped_tuple = tuple(skipped or ())
-        requested_set = set(SCAN_GROUPS if requested_tuple is None else requested_tuple)
-        skipped_set = set(skipped_tuple)
-        overlap = [
-            group for group in SCAN_GROUPS
-            if group in requested_set and group in skipped_set
-        ]
-        self.scan_selection = {
-            "requested": None if requested_tuple is None else list(requested_tuple),
-            "skipped": [group for group in SCAN_GROUPS if group in skipped_set],
-            "overlap": overlap,
-            "effective": list(self.scan_groups),
-            "warnings": list(warnings_list or ()),
-        }
+        self.scan_selection = build_scan_selection_context(
+            self.scan_groups,
+            requested=requested,
+            skipped=skipped,
+            warnings_list=warnings_list,
+        )
 
     def scan_group_selected(self, group: str) -> bool:
         return group in self.scan_groups
@@ -97,38 +68,13 @@ class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, 
         return super().add_check(*args, **kwargs)
 
     def run(self):
-        # Domain registration lookup is prerequisite context for domain, discovery,
-        # and mail scans. When domain is not selected, its findings are suppressed.
-        needs_root_context = any(
-            self.scan_group_selected(group)
-            for group in ("domain", "discovery", "mail")
-        )
-        if needs_root_context:
-            self._run_group_step("domain", self.rdap_lookup)
-
-        if self.scan_group_selected("domain"):
-            self._run_group_step("domain", self.collect_domain_dns)
-
-        if self.scan_group_selected("mail"):
-            self._run_group_step("mail", self.collect_mail_dns)
-
-        if self.scan_group_selected("discovery"):
-            self._run_group_step("discovery", self.discover_ct_subdomains)
-            self._run_group_step("discovery", self.crawl)
-            self._run_group_step("discovery", self.collect_subdomain_dns)
-
-        if self.scan_group_selected("tls"):
-            self._run_group_step("tls", self.check_tls)
-
-        if self.scan_group_selected("web") or self.scan_group_selected("cms"):
+        for step in build_scan_plan(self.scan_groups):
+            method = getattr(self, step.method_name)
             self._run_group_step(
-                "web",
-                self.check_http,
-                run_web_checks=self.scan_group_selected("web"),
+                step.active_group,
+                method,
+                **step.call_kwargs(),
             )
-
-        if self.scan_group_selected("cms"):
-            self._run_group_step("cms", self.check_cms_currency)
 
     def _score_result(self) -> ScoreResult:
         applicable = [c for c in self.checks if c.applicable and c.weight > 0]
