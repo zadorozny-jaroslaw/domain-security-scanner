@@ -4,15 +4,16 @@ from datetime import datetime, timezone
 
 from .base import BaseScanner
 from .cms import CmsMixin
-from .domains.mail import MailScanMixin
 from .domains.discovery import DiscoveryScanMixin
 from .domains.domain import DomainScanMixin
+from .domains.mail import MailScanMixin
+from .domains.tls import TlsScanMixin
 from .models import ScoreResult
-from .web_tls import WebTlsMixin
+from .web_tls import WebScanMixin
 from .version import __version__
 
 
-class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, WebTlsMixin, CmsMixin, BaseScanner):
+class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, WebScanMixin, CmsMixin, BaseScanner):
     """Orchestrates the existing scanner modules without changing scan behavior."""
 
     def run(self):
