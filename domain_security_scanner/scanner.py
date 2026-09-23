@@ -8,8 +8,8 @@ from .domains.discovery import DiscoveryScanMixin
 from .domains.domain import DomainScanMixin
 from .domains.mail import MailScanMixin
 from .domains.tls import TlsScanMixin
+from .domains.web import WebScanMixin
 from .models import ScoreResult
-from .web_tls import WebScanMixin
 from .version import __version__
 
 
