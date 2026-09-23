@@ -119,26 +119,27 @@ class WebScanMixin:
                     exact_version = True
         return {"headers": disclosed, "exact_version": exact_version}
 
-    def check_http(self):
+    def check_http(self, run_web_checks: bool = True):
         result: dict[str, Any] = {}
 
-        # Does HTTP redirect to HTTPS?
-        try:
-            r = self.session.get(f"http://{self.target_domain}", timeout=TIMEOUT, allow_redirects=False)
-            loc = r.headers.get("location", "")
-            result["http_status"] = r.status_code
-            result["http_location"] = loc
-            if r.status_code in (301, 302, 307, 308) and loc.lower().startswith("https://"):
-                self.add_check("Web", "HTTP -> HTTPS redirect", "pass",
-                               "HTTP przekierowuje do HTTPS.", 4, 4)
-            else:
-                self.add_check("Web", "HTTP -> HTTPS redirect", "warn",
-                               f"Brak jednoznacznego przekierowania HTTP→HTTPS (status {r.status_code}).",
-                               4, 0)
-        except Exception as e:
-            result["http_error"] = str(e)
-            self.add_check("Web", "HTTP -> HTTPS redirect", "unknown",
-                           f"Nie udało się sprawdzić HTTP: {e}", 4, 0, False)
+        # Does HTTP redirect to HTTPS? CMS-only scans skip this Web request.
+        if run_web_checks:
+            try:
+                r = self.session.get(f"http://{self.target_domain}", timeout=TIMEOUT, allow_redirects=False)
+                loc = r.headers.get("location", "")
+                result["http_status"] = r.status_code
+                result["http_location"] = loc
+                if r.status_code in (301, 302, 307, 308) and loc.lower().startswith("https://"):
+                    self.add_check("Web", "HTTP -> HTTPS redirect", "pass",
+                                   "HTTP przekierowuje do HTTPS.", 4, 4)
+                else:
+                    self.add_check("Web", "HTTP -> HTTPS redirect", "warn",
+                                   f"Brak jednoznacznego przekierowania HTTP→HTTPS (status {r.status_code}).",
+                                   4, 0)
+            except Exception as e:
+                result["http_error"] = str(e)
+                self.add_check("Web", "HTTP -> HTTPS redirect", "unknown",
+                               f"Nie udało się sprawdzić HTTP: {e}", 4, 0, False)
 
         try:
             r = self.session.get(f"https://{self.target_domain}", timeout=TIMEOUT, allow_redirects=True)
@@ -146,7 +147,30 @@ class WebScanMixin:
             result["final_url"] = r.url
             result["headers"] = dict(r.headers)
             html = r.text[:2_000_000] if r.text else ""
-            result["cms"] = self.detect_cms(r, html)
+            cms_selected = getattr(
+                self, "scan_group_selected", lambda group: True
+            )("cms")
+            if cms_selected:
+                run_group_step = getattr(self, "_run_group_step", None)
+                if run_group_step is not None:
+                    result["cms"] = run_group_step(
+                        "cms", self.detect_cms, r, html
+                    )
+                else:
+                    result["cms"] = self.detect_cms(r, html)
+            else:
+                result["cms"] = {
+                    "detected": False,
+                    "name": None,
+                    "version": None,
+                    "confidence": "none",
+                    "signals": [],
+                    "technology_headers": {},
+                }
+
+            if not run_web_checks:
+                self.http = result
+                return
 
             headers_l = {k.lower(): v for k, v in r.headers.items()}
 
@@ -250,20 +274,21 @@ class WebScanMixin:
             result["server_disclosure"] = {"headers": {}, "exact_version": False}
 
         # security.txt - informational only
-        try:
-            r = self.session.get(
-                f"https://{self.target_domain}/.well-known/security.txt",
-                timeout=TIMEOUT,
-                allow_redirects=True,
-            )
-            result["security_txt"] = r.status_code == 200 and "contact:" in r.text.lower()
-            self.add_check(
-                "Web", "security.txt",
-                "pass" if result["security_txt"] else "info",
-                "Wykryto security.txt." if result["security_txt"] else "Nie wykryto security.txt.",
-                0, 0, False
-            )
-        except Exception:
-            result["security_txt"] = False
+        if run_web_checks:
+            try:
+                r = self.session.get(
+                    f"https://{self.target_domain}/.well-known/security.txt",
+                    timeout=TIMEOUT,
+                    allow_redirects=True,
+                )
+                result["security_txt"] = r.status_code == 200 and "contact:" in r.text.lower()
+                self.add_check(
+                    "Web", "security.txt",
+                    "pass" if result["security_txt"] else "info",
+                    "Wykryto security.txt." if result["security_txt"] else "Nie wykryto security.txt.",
+                    0, 0, False
+                )
+            except Exception:
+                result["security_txt"] = False
 
         self.http = result
