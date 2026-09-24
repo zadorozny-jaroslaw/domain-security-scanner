@@ -25,8 +25,9 @@ The example below was generated against a maintainer-controlled WordPress test h
 - DNS inventory with resolver-error awareness, live/historical hostname separation, and same-site crawling
 - HTTPS/TLS certificate analysis and legacy TLS detection
 - HTTP-to-HTTPS redirect and mixed-content checks
+- Standards-backed Web response analysis for HSTS, HTTP caching, Web Linking, Alt-Svc, and passive HTTP/1.1 framing
 - Customer-facing HTTP security-header findings
-- Session/auth cookie flag checks (`Secure`, `HttpOnly`, `SameSite`)
+- RFC-backed cookie validation plus session/auth hardening checks (`Secure`, `HttpOnly`, `SameSite`)
 - SPF syntax, duplicate-record and recursive DNS lookup-budget analysis
 - DMARC policy, syntax, reporting and alignment analysis
 - DKIM common-selector checks with conservative `UNKNOWN` handling
@@ -134,7 +135,7 @@ The public scan groups are:
 | `discovery` | external attack-surface discovery: Certificate Transparency, crawl, DNS inventory, live/historical host classification |
 | `mail` | MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT |
 | `tls` | HTTPS certificate, expiry, negotiated TLS/cipher, legacy TLS support |
-| `web` | HTTP redirect, headers, cookies, mixed content, `security.txt`, server disclosure |
+| `web` | HTTP redirect, headers, cookies, mixed content, `security.txt`, server disclosure, and passive RFC-backed response metadata |
 | `cms` | passive CMS/platform detection and release-currency checks |
 
 With neither `--scan` nor `--skip`, all six groups run. `--scan` limits the effective scope to the listed groups. `--skip` removes listed groups from either the default full scope or a `--scan` selection. If both options are present, `--skip` always has higher priority. The CLI warns that the combination may be redundant and prints an additional warning naming any groups present in both lists.
@@ -199,16 +200,20 @@ Discovered hosts are grouped in reports as **current DNS**, **historical CT**, *
 - HTTPS and certificate validity/expiry
 - negotiated TLS protocol and cipher
 - TLS 1.0 / 1.1 legacy-protocol checks
-- HTTP-to-HTTPS redirect
+- HTTP-to-HTTPS redirect with RFC 9110 / RFC 3986 `Location` semantics
 - mixed HTTP content on HTTPS pages
-- sensitive/session cookie flags
-- HSTS
+- RFC 10025 cookie syntax/security semantics plus sensitive/session cookie hardening
+- RFC 6797 HSTS syntax and active-policy validation
+- RFC 9111 HTTP cache-policy metadata
+- RFC 8288 `Link` header serialization and relation inventory
+- RFC 7838 `Alt-Svc` advertisement parsing without contacting advertised alternatives
+- passive RFC 9112 HTTP/1.1 response-framing metadata (`Content-Length` / `Transfer-Encoding`)
 - Content-Security-Policy
 - X-Content-Type-Options
 - Referrer-Policy
 - Permissions-Policy
 - frame/clickjacking protection
-- `security.txt`
+- RFC 9116 / RFC 8615 `security.txt` validation
 - server/framework version disclosure
 
 ### CMS/platform
@@ -283,6 +288,8 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - Certificate Transparency is historical by design; the report separates CT names that now return NXDOMAIN from hosts with current DNS records, while resolver failures remain explicitly unknown.
 - SPF lookup count is a static worst-case estimate; macros and runtime DNS behavior can affect exact evaluation.
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
+- RFC 8288 `Link` targets are inventoried but not dereferenced, and RFC 7838 `Alt-Svc` alternatives are not contacted or certificate-validated.
+- RFC 9112 coverage is intentionally passive: it inspects HTTP version and framing headers exposed by `requests`/urllib3, but does not validate raw status/header bytes, chunk boundaries, trailers, exact body length, premature EOF, or request-smuggling behavior.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
 - Passive CMS detection can miss intentionally hidden or heavily proxied platforms.
 - Partial-scope scores summarize only the selected groups and should not be interpreted as equivalent to a full-scan score.
@@ -310,12 +317,16 @@ domain_security_scanner/
 │   ├── discovery/                    # CT discovery, crawl, DNS host inventory
 │   ├── mail/                         # MX/SPF/DMARC/DKIM/MTA-STS/TLS-RPT
 │   ├── tls/                          # certificate and TLS protocol checks
-│   ├── web/                          # HTTP, headers, cookies, mixed content, security.txt
+│   ├── web/                          # HTTP, headers, cookies, security.txt and additive RFC-backed Web checks
 │   └── cms/                          # passive CMS detection and release currency
 ├── standards/
 │   ├── __init__.py                   # standards package exports
 │   ├── registry.py                   # RFC metadata/reference registry
-│   └── mail.py                       # mail-standard parsing/validation helpers
+│   ├── mail.py                       # mail-standard parsing/validation helpers
+│   ├── web.py                        # redirects, HSTS, caching, cookies, security.txt
+│   ├── web_linking.py                # RFC 8288 Link parsing/validation
+│   ├── web_alt_svc.py                # RFC 7838 Alt-Svc parsing/validation
+│   └── web_http1.py                  # passive RFC 9112 HTTP/1.1 framing analysis
 └── reporting/
     ├── __init__.py
     └── pdf.py                        # scope-aware PDF rendering

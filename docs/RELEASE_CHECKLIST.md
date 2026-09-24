@@ -18,6 +18,8 @@ Releases are prepared on `develop`, promoted to `main` through a release pull re
 - [ ] Run at least one authorized default full-scope smoke test.
 - [ ] If scan-group selection/orchestration changed, run authorized partial-scope smoke tests covering `--scan`, `--skip`, and an overlapping `--scan`/`--skip` case.
 - [ ] Confirm partial-scope JSON/PDF output shows the effective scanned/skipped groups and does not render skipped groups as findings or score contributions.
+- [ ] If Web standards checks changed, run an authorized `--scan web` smoke test and review `http.cache`, `http.links`, `http.alt_svc`, and `http.http1_framing` evidence where applicable.
+- [ ] Confirm passive Web metadata checks do not introduce unexpected outbound requests: Link targets are not dereferenced, Alt-Svc alternatives are not contacted, and RFC 9112 does not add a raw HTTP probe.
 - [ ] If the report layout changed, regenerate `docs/example-report.pdf` and its preview.
 - [ ] Review generated reports for secrets or data that should not be committed.
 - [ ] Confirm README usage remains accurate.

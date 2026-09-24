@@ -25,6 +25,8 @@ Depending on the selected groups, the scanner may query the authorized target/ro
 
 Normal scan outputs can therefore be visible in the target's DNS, web-server, reverse-proxy, CDN, or firewall logs.
 
+Several standards-backed Web checks reuse the already-fetched HTTPS homepage response and do **not** create additional target requests: RFC 9111 cache metadata, RFC 8288 `Link`, RFC 7838 `Alt-Svc`, and the passive RFC 9112 HTTP/1.1 framing check. `Link` targets are not dereferenced, advertised `Alt-Svc` alternatives are not contacted, and the RFC 9112 check does not open a raw socket or send a separate HTTP/1.1 probe.
+
 A CMS-only scan reuses the HTTPS homepage as passive detection context but does not perform the Web group's HTTP redirect probe or `security.txt` request.
 
 ## Public infrastructure services

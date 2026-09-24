@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import re
-from http.cookies import SimpleCookie
 from typing import Any
 
 from bs4 import BeautifulSoup
 
 from ...constants import SECURITY_HEADERS, TIMEOUT
+from ...standards import (
+    RFC_6797,
+    RFC_9110,
+    RFC_9111,
+    RFC_9116,
+    RFC_10025,
+    analyze_hsts,
+    analyze_http_cache_policy,
+    analyze_redirect,
+    analyze_security_txt,
+    analyze_set_cookie_header,
+)
 
 
 class WebScanMixin:
@@ -50,60 +61,73 @@ class WebScanMixin:
         return sorted(found)
 
     @staticmethod
-    def _cookie_header_values(response) -> list[str]:
+    def _header_values(response, name: str) -> list[str]:
+        """Return repeated response header field values without comma folding when possible."""
         try:
             raw_headers = getattr(getattr(response, "raw", None), "headers", None)
             if raw_headers is not None and hasattr(raw_headers, "getlist"):
-                values = raw_headers.getlist("Set-Cookie")
+                values = raw_headers.getlist(name)
                 if values:
-                    return list(values)
+                    return [str(value) for value in values]
         except Exception:
             pass
-        value = response.headers.get("Set-Cookie") if getattr(response, "headers", None) else None
-        return [value] if value else []
+        headers = getattr(response, "headers", None)
+        value = headers.get(name) if headers else None
+        return [str(value)] if value else []
+
+    @classmethod
+    def _cookie_header_values(cls, response) -> list[str]:
+        return cls._header_values(response, "Set-Cookie")
 
     def _analyze_cookies(self, response) -> dict[str, Any]:
         responses = list(getattr(response, "history", []) or []) + [response]
         headers: list[str] = []
-        for item in responses:
-            headers.extend(self._cookie_header_values(item))
         cookies: list[dict[str, Any]] = []
-        sensitive_re = re.compile(r"(session|sess|auth|token|jwt|sid$|phpsessid|jsessionid|asp\.net|wordpress_logged_in|security)", re.I)
-        for header in headers:
-            jar = SimpleCookie()
-            try:
-                jar.load(header)
-            except Exception:
-                continue
-            for name, morsel in jar.items():
-                same_site = (morsel["samesite"] or "").strip()
-                item = {
-                    "name": name,
-                    "secure": bool(morsel["secure"]),
-                    "httponly": bool(morsel["httponly"]),
-                    "samesite": same_site or None,
-                    "sensitive": bool(sensitive_re.search(name)),
-                    "issues": [],
-                }
-                if item["sensitive"]:
-                    if not item["secure"]:
-                        item["issues"].append("missing Secure")
-                    if not item["httponly"]:
-                        item["issues"].append("missing HttpOnly")
-                    if not same_site:
-                        item["issues"].append("missing SameSite")
-                if same_site.lower() == "none" and not item["secure"]:
-                    item["issues"].append("SameSite=None without Secure")
+        for item_response in responses:
+            response_headers = self._cookie_header_values(item_response)
+            headers.extend(response_headers)
+            for header in response_headers:
+                item = analyze_set_cookie_header(header)
+                name = str(item.get("name") or "")
+                sensitive = bool(re.search(
+                    r"(session|sess|auth|token|jwt|sid$|phpsessid|jsessionid|asp\.net|wordpress_logged_in|security)",
+                    name,
+                    re.I,
+                ))
+                issues = list(item.get("rfc_errors", []))
+                hardening_issues: list[str] = []
+                if sensitive:
+                    if not item.get("secure"):
+                        hardening_issues.append("missing Secure")
+                    if not item.get("httponly"):
+                        hardening_issues.append("missing HttpOnly")
+                    if not item.get("samesite"):
+                        hardening_issues.append("missing SameSite")
+                issues.extend(hardening_issues)
+                item["sensitive"] = sensitive
+                item["hardening_issues"] = hardening_issues
+                item["issues"] = issues
                 cookies.append(item)
+
         sensitive = [x for x in cookies if x["sensitive"]]
         issues = [x for x in cookies if x["issues"]]
-        warning_items = [x for x in cookies if (x["sensitive"] and x["issues"]) or "SameSite=None without Secure" in x["issues"]]
+        rfc_errors = [
+            f"{x.get('name') or '(unnamed)'}: {error}"
+            for x in cookies
+            for error in x.get("rfc_errors", [])
+        ]
+        warning_items = [
+            x for x in cookies
+            if x.get("rfc_errors") or (x["sensitive"] and x.get("hardening_issues"))
+        ]
         return {
             "set_cookie_headers": len(headers),
             "cookies": cookies,
             "sensitive_count": len(sensitive),
             "issue_count": len(issues),
             "warning_count": len(warning_items),
+            "rfc_error_count": len(rfc_errors),
+            "rfc_errors": rfc_errors,
         }
 
     @staticmethod
@@ -124,18 +148,31 @@ class WebScanMixin:
 
         # Does HTTP redirect to HTTPS? CMS-only scans skip this Web request.
         if run_web_checks:
+            source_url = f"http://{self.target_domain}"
             try:
-                r = self.session.get(f"http://{self.target_domain}", timeout=TIMEOUT, allow_redirects=False)
+                r = self.session.get(source_url, timeout=TIMEOUT, allow_redirects=False)
                 loc = r.headers.get("location", "")
+                redirect = analyze_redirect(r.status_code, loc, source_url)
                 result["http_status"] = r.status_code
                 result["http_location"] = loc
-                if r.status_code in (301, 302, 307, 308) and loc.lower().startswith("https://"):
-                    self.add_check("Web", "HTTP -> HTTPS redirect", "pass",
-                                   "HTTP przekierowuje do HTTPS.", 4, 4)
+                result["http_redirect"] = redirect
+                if redirect["secure_target"]:
+                    self.add_check(
+                        "Web", "HTTP -> HTTPS redirect", "pass",
+                        f"HTTP przekierowuje do HTTPS zgodnie z semantyką {RFC_9110.label}.",
+                        4, 4,
+                    )
                 else:
-                    self.add_check("Web", "HTTP -> HTTPS redirect", "warn",
-                                   f"Brak jednoznacznego przekierowania HTTP→HTTPS (status {r.status_code}).",
-                                   4, 0)
+                    detail = ""
+                    if redirect["redirect_status"] and not redirect["valid_location"]:
+                        detail = " Nieprawidłowa wartość Location."
+                    elif redirect["redirect_status"] and redirect["resolved_location"]:
+                        detail = f" Cel: {redirect['resolved_location']}."
+                    self.add_check(
+                        "Web", "HTTP -> HTTPS redirect", "warn",
+                        f"Brak jednoznacznego przekierowania HTTP→HTTPS (status {r.status_code}).{detail}",
+                        4, 0,
+                    )
             except Exception as e:
                 result["http_error"] = str(e)
                 self.add_check("Web", "HTTP -> HTTPS redirect", "unknown",
@@ -172,23 +209,85 @@ class WebScanMixin:
                 self.http = result
                 return
 
+            capture_response_metadata = getattr(
+                self, "_capture_web_response_metadata", None
+            )
+            if callable(capture_response_metadata):
+                capture_response_metadata(r, result)
+
             headers_l = {k.lower(): v for k, v in r.headers.items()}
 
-            # Cookie flags. Only sensitive/session-like cookies generate WARN findings;
-            # analytics/preferences are inventoried without overstating risk.
+            # RFC 9111 cache metadata. This is advisory/non-scoring: the scanner
+            # validates syntax and ambiguity without assuming every page should
+            # be cacheable or non-cacheable.
+            cache_analysis = analyze_http_cache_policy(
+                self._header_values(r, "Cache-Control"),
+                expires_values=self._header_values(r, "Expires"),
+                age_values=self._header_values(r, "Age"),
+                pragma_values=self._header_values(r, "Pragma"),
+                warning_values=self._header_values(r, "Warning"),
+            )
+            result["cache"] = cache_analysis
+            cache_review = cache_analysis["errors"] + cache_analysis["warnings"]
+            if cache_review:
+                self.add_check(
+                    "Web", "HTTP cache policy", "warn",
+                    f"Metadane cache wymagają przeglądu wg {RFC_9111.label}: "
+                    + "; ".join(cache_review[:3]) + ".",
+                    0, 0, False,
+                )
+            elif cache_analysis["present"]:
+                details = []
+                if cache_analysis["no_store"]:
+                    details.append("no-store")
+                if cache_analysis["private"]:
+                    details.append("private")
+                if cache_analysis["no_cache"]:
+                    details.append("no-cache")
+                if cache_analysis["s_maxage"] is not None:
+                    details.append(f"s-maxage={cache_analysis['s_maxage']}")
+                elif cache_analysis["max_age"] is not None:
+                    details.append(f"max-age={cache_analysis['max_age']}")
+                summary = ", ".join(details) or cache_analysis["freshness_source"]
+                self.add_check(
+                    "Web", "HTTP cache policy", "info",
+                    f"Metadane cache są syntaktycznie spójne wg {RFC_9111.label} ({summary}).",
+                    0, 0, False,
+                )
+            else:
+                self.add_check(
+                    "Web", "HTTP cache policy", "info",
+                    f"Brak jawnych nagłówków polityki cache; {RFC_9111.label} dopuszcza heurystyczne cache'owanie części odpowiedzi.",
+                    0, 0, False,
+                )
+
+            # Cookie flags. RFC 10025 violations and sensitive/session hardening
+            # gaps generate WARN findings; non-sensitive cookies remain inventory.
             cookie_analysis = self._analyze_cookies(r)
             result["cookies"] = cookie_analysis
-            sensitive_issues = [x for x in cookie_analysis["cookies"] if x["sensitive"] and x["issues"]]
-            if sensitive_issues:
-                short = "; ".join(f"{x['name']}: {', '.join(x['issues'])}" for x in sensitive_issues[:4])
-                self.add_check("Web", "Cookie security flags", "warn",
-                               f"Wykryto problemy z flagami wrażliwych cookies: {short}.", 3, 0)
+            warning_cookies = [x for x in cookie_analysis["cookies"] if x["issues"]]
+            if warning_cookies:
+                short = "; ".join(
+                    f"{x.get('name') or '(unnamed)'}: {', '.join(x['issues'])}"
+                    for x in warning_cookies[:4]
+                )
+                self.add_check(
+                    "Web", "Cookie security flags", "warn",
+                    f"Wykryto problemy z cookies ({RFC_10025.label} / hardening): {short}.",
+                    3, 0,
+                )
             elif cookie_analysis["sensitive_count"]:
-                self.add_check("Web", "Cookie security flags", "pass",
-                               f"Wrażliwe/session cookies ({cookie_analysis['sensitive_count']}) mają podstawowe flagi Secure/HttpOnly/SameSite.", 3, 3)
+                self.add_check(
+                    "Web", "Cookie security flags", "pass",
+                    f"Wrażliwe/session cookies ({cookie_analysis['sensitive_count']}) mają podstawowe flagi Secure/HttpOnly/SameSite i nie wykryto naruszeń {RFC_10025.label}.",
+                    3, 3,
+                )
             else:
-                self.add_check("Web", "Cookie security flags", "info",
-                               "Nie wykryto jednoznacznie wrażliwych/session cookies w odpowiedzi strony głównej.", 0, 0, False)
+                self.add_check(
+                    "Web", "Cookie security flags", "info",
+                    f"Nie wykryto jednoznacznie wrażliwych/session cookies; sprawdzono składnię i wymagania {RFC_10025.label} dla widocznych Set-Cookie.",
+                    0, 0, False,
+                )
 
             # Mixed HTTP resources across pages seen by the crawler plus this response.
             mixed = set(self.crawl_mixed_content)
@@ -214,12 +313,31 @@ class WebScanMixin:
             found = {friendly: headers_l.get(key) for key, friendly in SECURITY_HEADERS.items()}
             result["security_headers"] = found
 
-            # HSTS
-            hsts = headers_l.get("strict-transport-security")
-            if hsts:
-                self.add_check("Web", "HSTS", "pass", "HSTS jest ustawione.", 4, 4)
-            else:
+            # HSTS: validate the RFC 6797 field rather than treating mere presence as pass.
+            hsts_analysis = analyze_hsts(self._header_values(r, "Strict-Transport-Security"))
+            result["hsts"] = hsts_analysis
+            if not hsts_analysis["present"]:
                 self.add_check("Web", "HSTS", "warn", "Brak nagłówka HSTS.", 4, 0)
+            elif not hsts_analysis["valid"]:
+                self.add_check(
+                    "Web", "HSTS", "warn",
+                    f"HSTS jest ustawione, ale nie spełnia składni {RFC_6797.label}: "
+                    + "; ".join(hsts_analysis["errors"][:3]) + ".",
+                    4, 0,
+                )
+            elif not hsts_analysis["active"]:
+                self.add_check(
+                    "Web", "HSTS", "warn",
+                    f"HSTS jest poprawne składniowo, ale max-age=0 wyłącza politykę ({RFC_6797.label}).",
+                    4, 0,
+                )
+            else:
+                suffix = "; includeSubDomains" if hsts_analysis["include_subdomains"] else ""
+                self.add_check(
+                    "Web", "HSTS", "pass",
+                    f"HSTS jest poprawne wg {RFC_6797.label} (max-age={hsts_analysis['max_age']}{suffix}).",
+                    4, 4,
+                )
 
             csp = headers_l.get("content-security-policy")
             if csp:
@@ -269,26 +387,70 @@ class WebScanMixin:
                 "signals": [],
                 "technology_headers": {},
             }
-            result["cookies"] = {"set_cookie_headers": 0, "cookies": [], "sensitive_count": 0, "issue_count": 0, "warning_count": 0}
+            result["cookies"] = {
+                "set_cookie_headers": 0,
+                "cookies": [],
+                "sensitive_count": 0,
+                "issue_count": 0,
+                "warning_count": 0,
+                "rfc_error_count": 0,
+                "rfc_errors": [],
+            }
             result["mixed_content"] = sorted(self.crawl_mixed_content)
             result["server_disclosure"] = {"headers": {}, "exact_version": False}
+            result["cache"] = {
+                "present": False,
+                "cache_control_present": False,
+                "valid": False,
+                "review": False,
+                "errors": [],
+                "warnings": [],
+            }
 
-        # security.txt - informational only
+        # security.txt - informational/advisory only, but validate RFC 9116 when present.
         if run_web_checks:
+            security_txt_url = f"https://{self.target_domain}/.well-known/security.txt"
             try:
                 r = self.session.get(
-                    f"https://{self.target_domain}/.well-known/security.txt",
+                    security_txt_url,
                     timeout=TIMEOUT,
                     allow_redirects=True,
                 )
-                result["security_txt"] = r.status_code == 200 and "contact:" in r.text.lower()
-                self.add_check(
-                    "Web", "security.txt",
-                    "pass" if result["security_txt"] else "info",
-                    "Wykryto security.txt." if result["security_txt"] else "Nie wykryto security.txt.",
-                    0, 0, False
+                security_txt = analyze_security_txt(
+                    status_code=r.status_code,
+                    text=r.text or "",
+                    content_type=r.headers.get("Content-Type", ""),
+                    requested_url=security_txt_url,
+                    final_url=getattr(r, "url", security_txt_url) or security_txt_url,
                 )
-            except Exception:
+                result["security_txt"] = security_txt["valid"]
+                result["security_txt_analysis"] = security_txt
+                if security_txt["valid"]:
+                    self.add_check(
+                        "Web", "security.txt", "pass",
+                        f"Wykryto poprawny security.txt zgodny z {RFC_9116.label}.",
+                        0, 0, False,
+                    )
+                elif security_txt["present"]:
+                    self.add_check(
+                        "Web", "security.txt", "warn",
+                        f"security.txt jest obecny, ale wymaga korekty wg {RFC_9116.label}: "
+                        + "; ".join(security_txt["errors"][:3]) + ".",
+                        0, 0, False,
+                    )
+                else:
+                    self.add_check(
+                        "Web", "security.txt", "info",
+                        "Nie wykryto security.txt w /.well-known/security.txt.",
+                        0, 0, False,
+                    )
+            except Exception as e:
                 result["security_txt"] = False
+                result["security_txt_analysis"] = {
+                    "present": False,
+                    "valid": False,
+                    "errors": [str(e)],
+                    "warnings": [],
+                }
 
         self.http = result
