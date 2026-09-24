@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-24
+
 ### Added
 
 - Add selectable scan groups for `domain`, `discovery`, `mail`, `tls`, `web`, and `cms` through `--scan` and `--skip`.
