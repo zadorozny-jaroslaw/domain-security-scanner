@@ -234,6 +234,13 @@ class Http11FramingIntegrationTest(unittest.TestCase):
         instance.session.get = fake_get
         instance.check_http()
 
+        # The final Web mixin composition should retain all additive passive
+        # standards analyses on the same primary HTTPS response.
+        self.assertIn("cache", instance.http)
+        self.assertIn("links", instance.http)
+        self.assertIn("alt_svc", instance.http)
+        self.assertIn("http1_framing", instance.http)
+
         analysis = instance.http["http1_framing"]
         self.assertTrue(analysis["applicable"])
         self.assertTrue(analysis["valid"])
