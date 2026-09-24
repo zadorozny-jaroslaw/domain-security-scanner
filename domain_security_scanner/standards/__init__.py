@@ -8,19 +8,67 @@ from .mail import (
     mta_sts_mx_matches,
     parse_mta_sts_policy,
 )
-from .registry import RFC_7505, RFC_8460, RFC_8461, STANDARD_REFERENCES, StandardReference, get_standard
+from .registry import (
+    RFC_3986,
+    RFC_6797,
+    RFC_7505,
+    RFC_7838,
+    RFC_8288,
+    RFC_8460,
+    RFC_8461,
+    RFC_8615,
+    RFC_9110,
+    RFC_9111,
+    RFC_9112,
+    RFC_9116,
+    RFC_10025,
+    STANDARD_REFERENCES,
+    StandardReference,
+    get_standard,
+)
+from .web import (
+    analyze_hsts,
+    analyze_http_cache_policy,
+    analyze_redirect,
+    analyze_security_txt,
+    analyze_set_cookie_header,
+    is_well_formed_uri_reference,
+)
+from .web_alt_svc import analyze_alt_svc_headers
+from .web_http1 import analyze_http1_response_framing, normalize_http_version
+from .web_linking import analyze_link_headers
 
 __all__ = [
     "StandardReference",
     "STANDARD_REFERENCES",
     "get_standard",
+    "RFC_3986",
+    "RFC_6797",
     "RFC_7505",
+    "RFC_7838",
+    "RFC_8288",
     "RFC_8460",
     "RFC_8461",
+    "RFC_8615",
+    "RFC_9110",
+    "RFC_9111",
+    "RFC_9112",
+    "RFC_9116",
+    "RFC_10025",
     "analyze_mx_records",
     "analyze_tls_rpt_txt",
     "analyze_mta_sts_txt",
     "parse_mta_sts_policy",
     "mta_sts_mx_matches",
     "analyze_mta_sts_mx_coverage",
+    "analyze_alt_svc_headers",
+    "analyze_hsts",
+    "analyze_http_cache_policy",
+    "analyze_http1_response_framing",
+    "analyze_link_headers",
+    "analyze_redirect",
+    "analyze_security_txt",
+    "analyze_set_cookie_header",
+    "is_well_formed_uri_reference",
+    "normalize_http_version",
 ]

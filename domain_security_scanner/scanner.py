@@ -3,27 +3,78 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from .base import BaseScanner
-from .cms import CmsMixin
-from .dns_mail import DnsMailMixin
-from .inventory import InventoryMixin
+from .domains.cms import CmsScanMixin
+from .domains.discovery import DiscoveryScanMixin
+from .domains.domain import DomainScanMixin
+from .domains.mail import MailScanMixin
+from .domains.tls import TlsScanMixin
+from .domains.web import WebScanMixin
 from .models import ScoreResult
-from .rdap import RdapMixin
-from .web_tls import WebTlsMixin
+from .orchestration import (
+    SCAN_GROUPS,
+    build_scan_plan,
+    build_scan_selection_context,
+    normalize_scan_groups,
+)
 from .version import __version__
 
 
-class Scanner(RdapMixin, DnsMailMixin, InventoryMixin, WebTlsMixin, CmsMixin, BaseScanner):
-    """Orchestrates the existing scanner modules without changing scan behavior."""
+class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, WebScanMixin, CmsScanMixin, BaseScanner):
+    """Orchestrates scan groups while preserving the existing default behavior."""
+
+    def __init__(
+        self,
+        domain: str,
+        max_pages: int = 20,
+        max_hosts: int = 25,
+        scan_groups=None,
+    ):
+        self._active_scan_group = None
+        super().__init__(domain, max_pages=max_pages, max_hosts=max_hosts)
+
+        self.scan_groups = normalize_scan_groups(scan_groups)
+        self.scan_selection = build_scan_selection_context(self.scan_groups)
+
+    def set_scan_selection_context(
+        self,
+        requested=None,
+        skipped=None,
+        warnings_list=None,
+    ) -> None:
+        self.scan_selection = build_scan_selection_context(
+            self.scan_groups,
+            requested=requested,
+            skipped=skipped,
+            warnings_list=warnings_list,
+        )
+
+    def scan_group_selected(self, group: str) -> bool:
+        return group in self.scan_groups
+
+    def _run_group_step(self, group: str, func, *args, **kwargs):
+        previous = self._active_scan_group
+        self._active_scan_group = group
+        try:
+            return func(*args, **kwargs)
+        finally:
+            self._active_scan_group = previous
+
+    def add_check(self, *args, **kwargs):
+        if (
+            self._active_scan_group is not None
+            and not self.scan_group_selected(self._active_scan_group)
+        ):
+            return None
+        return super().add_check(*args, **kwargs)
 
     def run(self):
-        self.rdap_lookup()
-        self.collect_dns()
-        self.discover_ct_subdomains()
-        self.crawl()
-        self.collect_subdomain_dns()
-        self.check_tls()
-        self.check_http()
-        self.check_cms_currency()
+        for step in build_scan_plan(self.scan_groups):
+            method = getattr(self, step.method_name)
+            self._run_group_step(
+                step.active_group,
+                method,
+                **step.call_kwargs(),
+            )
 
     def _score_result(self) -> ScoreResult:
         applicable = [c for c in self.checks if c.applicable and c.weight > 0]
@@ -56,6 +107,8 @@ class Scanner(RdapMixin, DnsMailMixin, InventoryMixin, WebTlsMixin, CmsMixin, Ba
             "root_domain": self.root_domain,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "scanner_version": __version__,
+            "scan_groups": list(self.scan_groups),
+            "scan_selection": dict(self.scan_selection),
             "score": self.score(),
             "checks": [c.to_dict() for c in self.checks],
             "rdap": self.rdap,

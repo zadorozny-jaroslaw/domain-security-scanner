@@ -5,11 +5,12 @@ import dns.resolver
 
 import domain_security_scan as scanner
 from domain_security_scanner.models import DnsQueryResult, DnsQueryState
-
+from domain_security_scanner.version import __version__ as package_version
 
 class CoreHelpersTest(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(scanner.__version__, "1.1.0")
+        self.assertEqual(scanner.__version__, package_version)
+        self.assertRegex(package_version, r"^\d+\.\d+\.\d+$")
 
     def test_normalize_domain_preserves_web_host(self):
         self.assertEqual(

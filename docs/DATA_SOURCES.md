@@ -2,23 +2,38 @@
 
 The scanner performs external network requests. This document explains the main destinations so operators understand what data can leave their machine.
 
+## Scan-group selection and network behavior
+
+The default scan runs all six functional groups: `domain`, `discovery`, `mail`, `tls`, `web`, and `cms`. Operators can restrict the effective scope with `--scan` or remove groups with `--skip`.
+
+Skipping a group prevents that group's findings from running, but a selected group can still require limited prerequisite context owned by another group. In particular:
+
+- `domain`, `discovery`, and `mail` can require RDAP/root-domain discovery;
+- `cms` can require one HTTPS homepage request even when `web` findings are not selected.
+
+Prerequisite work is deliberately limited to context needed by the selected group. It does not enable the skipped group's findings or score contribution. See [SCAN_GROUPS.md](SCAN_GROUPS.md) for the execution model.
+
 ## Target-controlled services
 
-The scanner may query the authorized target/root domain using:
+Depending on the selected groups, the scanner may query the authorized target/root domain using:
 
 - DNS through the system-configured resolver;
 - HTTP and HTTPS;
 - TLS handshakes;
 - `https://mta-sts.<root-domain>/.well-known/mta-sts.txt` only after a usable RFC 8461 MTA-STS TXT indicator is found; redirects are not followed and normal HTTPS certificate validation remains enabled;
-- `https://<web-target>/.well-known/security.txt`.
+- `https://<web-target>/.well-known/security.txt` when Web checks are selected.
 
 Normal scan outputs can therefore be visible in the target's DNS, web-server, reverse-proxy, CDN, or firewall logs.
+
+Several standards-backed Web checks reuse the already-fetched HTTPS homepage response and do **not** create additional target requests: RFC 9111 cache metadata, RFC 8288 `Link`, RFC 7838 `Alt-Svc`, and the passive RFC 9112 HTTP/1.1 framing check. `Link` targets are not dereferenced, advertised `Alt-Svc` alternatives are not contacted, and the RFC 9112 check does not open a raw socket or send a separate HTTP/1.1 probe.
+
+A CMS-only scan reuses the HTTPS homepage as passive detection context but does not perform the Web group's HTTP redirect probe or `security.txt` request.
 
 ## Public infrastructure services
 
 ### IANA RDAP bootstrap
 
-Used to discover the appropriate RDAP service for a TLD:
+Used to discover the appropriate RDAP service for a TLD when selected groups require registered/root-domain context:
 
 ```text
 https://data.iana.org/rdap/dns.json
@@ -28,7 +43,7 @@ For `.pl`, the scanner can use the NASK RDAP service as a fallback/registry sour
 
 ### Certificate Transparency search
 
-Passive hostname history is queried through:
+When the `discovery` group is selected, passive hostname history is queried through:
 
 ```text
 https://crt.sh/
@@ -38,7 +53,7 @@ The queried root domain is sent to this service. Certificate Transparency data i
 
 ## CMS release information
 
-When a supported CMS is confidently detected with a public version, release-currency checks can query public upstream sources, currently including:
+When the `cms` group is selected and a supported CMS is confidently detected with a public version, release-currency checks can query public upstream sources, currently including:
 
 - WordPress release/version API (`api.wordpress.org`)
 - Joomla public GitHub release feed
@@ -51,4 +66,4 @@ These requests are for project release metadata. The target domain itself is not
 
 PDF and JSON reports are written locally to the path/prefix selected by the operator. The project does not include a telemetry or report-upload feature.
 
-Reports may contain domain names, IP addresses, DNS records, public email addresses, software versions, and configuration findings. Treat customer reports as potentially sensitive operational data and do not commit them to a public repository.
+Reports may contain domain names, IP addresses, DNS records, public email addresses, software versions, configuration findings, and scan-scope metadata. Treat customer reports as potentially sensitive operational data and do not commit them to a public repository.
