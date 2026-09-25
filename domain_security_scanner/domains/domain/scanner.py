@@ -5,6 +5,7 @@ from typing import Optional
 from ...constants import COMMON_DNS_TYPES, TIMEOUT
 from ...models import DnsQueryResult
 from ...utils import days_until, fallback_root_domain
+from .delegation_findings import build_delegation_findings
 
 
 class DomainScanMixin:
@@ -170,16 +171,31 @@ class DomainScanMixin:
         elif signed is False:
             self.rdap["dnssec_rdap"] = False
 
-        if nameservers:
-            if len(set(nameservers)) >= 2:
-                self.add_check("Domain", "Name server redundancy", "pass",
-                               f"Wykryto {len(set(nameservers))} serwery NS.", 3, 3)
-            else:
-                self.add_check("Domain", "Name server redundancy", "warn",
-                               "Wykryto tylko jeden serwer NS.", 3, 0)
+    def _add_delegation_findings(self):
+        """Emit #14 Domain checks from previously collected delegation evidence."""
+        evidence = getattr(self, "delegation", None)
+        analysis = getattr(self, "delegation_analysis", None)
+        if evidence is None or analysis is None:
+            return
+
+        for finding in build_delegation_findings(evidence, analysis):
+            self.add_check(
+                "Domain",
+                finding.name,
+                finding.status,
+                finding.message,
+                finding.weight,
+                finding.earned,
+                finding.applicable,
+            )
 
     def collect_domain_dns(self):
         """Collect root/target DNS inventory and evaluate domain-level DNS posture."""
+        # Delegation evidence is collected by DelegationScanMixin before this
+        # existing Domain step. Emit findings here so the old RDAP-only
+        # nameserver redundancy check is replaced rather than duplicated.
+        self._add_delegation_findings()
+
         # Registration/domain checks always use the registered root domain.
         # Web checks continue to use the exact target host supplied by the user.
         root = {}
