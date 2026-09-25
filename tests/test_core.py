@@ -237,13 +237,19 @@ class HostInventoryTest(unittest.TestCase):
             "empty.example.com": {rtype: [] for rtype in scanner.COMMON_DNS_TYPES},
             "unknown.example.com": {rtype: [] for rtype in scanner.COMMON_DNS_TYPES},
         }
-        instance.dns_query_cache[("old.example.com", "A")] = DnsQueryResult(
+        instance.dns_query_cache[
+            instance._recursive_dns_cache_key("old.example.com", "A")
+        ] = DnsQueryResult(
             "old.example.com", "A", DnsQueryState.NXDOMAIN
         )
-        instance.dns_query_cache[("empty.example.com", "A")] = DnsQueryResult(
+        instance.dns_query_cache[
+            instance._recursive_dns_cache_key("empty.example.com", "A")
+        ] = DnsQueryResult(
             "empty.example.com", "A", DnsQueryState.NO_ANSWER
         )
-        instance.dns_query_cache[("unknown.example.com", "A")] = DnsQueryResult(
+        instance.dns_query_cache[
+            instance._recursive_dns_cache_key("unknown.example.com", "A")
+        ] = DnsQueryResult(
             "unknown.example.com", "A", DnsQueryState.TIMEOUT, error="timeout"
         )
 
