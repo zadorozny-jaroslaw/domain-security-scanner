@@ -376,7 +376,7 @@ The project uses semantic versioning:
 - `1.x.0` - compatible new checks/features
 - `2.0.0` - breaking behavior or interface changes
 
-See [CHANGELOG.md](CHANGELOG.md), [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), and [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md).
+See [docs/ROADMAP.md](docs/ROADMAP.md) for planned release themes and scope, [CHANGELOG.md](CHANGELOG.md) for implemented changes, [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) for release validation, and [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for the branch and release workflow.
 
 ## License
 

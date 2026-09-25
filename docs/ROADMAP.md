@@ -78,9 +78,47 @@ All new checks must preserve the project's conservative evidence rule: resolver 
 
 ### Theme
 
+**CLI Readiness & Automation**
+
+Target completion: **before 8 October 2026**.
+
+The goal of v1.4.0 is to turn the existing command-line entry point into a predictable, discoverable, automation-friendly interface suitable for normal operator use, shell pipelines, CI, and future packaging.
+
+The release should improve how users invoke and integrate the scanner without materially changing the security checks themselves.
+
+Primary scope:
+
+- explicit command structure for scanning and report comparison;
+- improved built-in help, examples, option grouping, and language consistency;
+- controlled verbose and quiet execution modes;
+- defined stdout/stderr behavior;
+- machine-readable JSON output suitable for shell pipelines;
+- stable execution-error and exit-code semantics;
+- installable CLI and `python -m` entry points;
+- regression tests covering the public CLI contract;
+- user-facing documentation for interactive and automation workflows.
+
+Existing output and comparison work developed before this milestone, including JSON-only output and semantic report comparison, should be treated as foundations rather than duplicated implementations.
+
+The release should preserve compatibility with the current scanner invocation where practical while establishing a cleaner command structure for future development.
+
+See [V1_4_CLI_PLAN.md](V1_4_CLI_PLAN.md) for the detailed implementation scope and release gate.
+
+### v1.4.0 completion criteria
+
+v1.4.0 is ready when an operator can reliably:
+
+> discover the available commands through built-in help; run an authorized scan with predictable progress and error behavior; consume machine-readable JSON without human-oriented output corrupting it; compare existing reports without performing a scan; invoke the scanner through supported Python/package entry points; and depend on documented exit codes and CLI behavior in automation.
+
+CLI changes must not weaken authorization requirements, change security findings merely because presentation mode changes, or turn unavailable external evidence into execution failure when the scanner can represent that evidence as UNKNOWN/VERIFY.
+
+## Next candidate: v1.5.0
+
+### Theme
+
 **TLS & Certificate Posture**
 
-Candidate scope after v1.3.0:
+Candidate scope after v1.4.0:
 
 - certificate identity and SAN/wildcard handling;
 - chain and issuer evidence;
@@ -89,7 +127,7 @@ Candidate scope after v1.3.0:
 - revocation/stapling evidence where reliably observable;
 - clearer TLS-specific reporting and JSON structure.
 
-The final v1.4.0 scope should be decided after v1.3.0 is released and its follow-up issues are reviewed.
+The final v1.5.0 scope should be decided after v1.4.0 is released and its follow-up issues are reviewed.
 
 ## Later candidates
 
@@ -99,8 +137,6 @@ Potential later release themes include:
 - additional mail standards and operational checks;
 - DANE/TLSA;
 - SVCB/HTTPS records;
-- report-to-report comparison/baseline mode;
-- JSON schema/versioning improvements;
-- additional automation/CI-oriented output controls.
+- JSON schema/versioning improvements.
 
 These are directional ideas, not commitments. Prefer a coherent release theme over adding unrelated checks simply because an RFC exists.
