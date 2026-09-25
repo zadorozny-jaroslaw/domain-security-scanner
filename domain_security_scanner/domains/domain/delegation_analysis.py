@@ -210,9 +210,13 @@ def _authority_analysis(
         return AUTHORITY_AUTHORITATIVE, tuple(views)
 
     if saw_not_authoritative and not saw_unknown and not saw_authoritative_without_ns:
+        if server.unprobed_addresses:
+            return AUTHORITY_UNKNOWN, ()
         return AUTHORITY_LAME, ()
 
     if saw_authoritative_without_ns and not saw_not_authoritative and not saw_unknown:
+        if server.unprobed_addresses:
+            return AUTHORITY_UNKNOWN, ()
         return AUTHORITY_AUTHORITATIVE_NO_NS, ()
 
     return AUTHORITY_UNKNOWN, ()

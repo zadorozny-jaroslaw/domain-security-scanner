@@ -277,6 +277,33 @@ class DelegationAnalysisHelpersTest(unittest.TestCase):
         self.assertEqual(len(analysis.authoritative_child_views), 1)
 
 
+    def test_unprobed_alternate_prevents_whole_nameserver_lame_label(self):
+        server = DelegatedNameserverEvidence(
+            name="ns1.example.net",
+            addresses=_address_evidence(
+                "ns1.example.net",
+                ipv4=("192.0.2.10", "192.0.2.11"),
+                a_state=DnsQueryState.ANSWER,
+            ),
+            candidate_addresses=("192.0.2.10", "192.0.2.11"),
+            probe_addresses=("192.0.2.10",),
+            unprobed_addresses=("192.0.2.11",),
+            authority_queries=(
+                _authority_result(
+                    "ns1.example.net",
+                    "192.0.2.10",
+                    state=DnsQueryState.NOT_AUTHORITATIVE,
+                    aa=False,
+                ),
+            ),
+        )
+
+        analysis = analyze_nameserver(server, "example.com")
+
+        self.assertEqual(analysis.authority_status, AUTHORITY_UNKNOWN)
+
+
+
 class GlueAnalysisTest(unittest.TestCase):
     def test_in_bailiwick_glue_presence_and_consistency_are_observed(self):
         server = DelegatedNameserverEvidence(

@@ -1,6 +1,8 @@
 import unittest
 
 from domain_security_scanner.domains.domain.delegation import (
+    DELEGATION_DIRECT_TIMEOUT,
+    MAX_DELEGATED_ADDRESS_PROBES_PER_NS,
     MAX_DELEGATED_AUTHORITY_PROBES,
     MAX_PARENT_DELEGATION_ATTEMPTS,
     DelegationGlueEvidence,
@@ -66,6 +68,7 @@ class _Harness(DelegationScanMixin):
         self.direct_map = direct_map or {}
         self.recursive_calls = []
         self.direct_calls = []
+        self.direct_timeouts = []
         self.delegation = None
 
     def dns_query_result(self, host, rtype):
@@ -94,6 +97,7 @@ class _Harness(DelegationScanMixin):
             DnsTransport(transport),
         )
         self.direct_calls.append(key)
+        self.direct_timeouts.append(timeout)
         if key in self.direct_map:
             return self.direct_map[key]
         if self.direct:
@@ -241,6 +245,7 @@ class ParentDelegationCollectionTest(unittest.TestCase):
         self.assertEqual(evidence.source_server_name, "a.gtld-servers.net")
         self.assertEqual(evidence.source_server_ip, "192.0.2.53")
         self.assertEqual(len(evidence.delegation_queries), 1)
+        self.assertEqual(harness.direct_timeouts, [DELEGATION_DIRECT_TIMEOUT])
         self.assertNotIn(("example.com", "NS"), harness.recursive_calls)
         self.assertEqual(
             harness.direct_calls,
@@ -389,8 +394,9 @@ class DelegatedNameserverCollectionTest(unittest.TestCase):
             first.candidate_addresses,
             ("192.0.2.10", "2001:db8::10"),
         )
-        self.assertEqual(first.probe_addresses, first.candidate_addresses)
-        self.assertEqual(len(first.authority_queries), 2)
+        self.assertEqual(first.probe_addresses, ("192.0.2.10",))
+        self.assertEqual(first.unprobed_addresses, ("2001:db8::10",))
+        self.assertEqual(len(first.authority_queries), 1)
         self.assertTrue(first.has_authoritative_answer)
 
         self.assertEqual(second.addresses.ipv4, ("192.0.2.20",))
@@ -398,6 +404,7 @@ class DelegatedNameserverCollectionTest(unittest.TestCase):
         self.assertEqual(second.probe_addresses, ("192.0.2.20",))
         self.assertEqual(len(second.authority_queries), 1)
         self.assertTrue(second.has_authoritative_answer)
+        self.assertEqual(harness.direct_timeouts, [DELEGATION_DIRECT_TIMEOUT] * 2)
 
         self.assertEqual(
             harness.recursive_calls,
@@ -557,9 +564,75 @@ class DelegatedNameserverCollectionTest(unittest.TestCase):
             enriched.delegated_servers[1].has_authoritative_answer
         )
 
-    def test_authority_probes_are_globally_bounded_and_breadth_first(self):
+    def test_failed_first_probe_uses_one_bounded_fallback(self):
+        evidence = ParentDelegationEvidence(
+            zone="example.com",
+            parent_zone="com",
+            delegated_nameservers=("ns1.example.net",),
+            source_server_name="a.gtld-servers.net",
+            source_server_ip="192.0.2.53",
+        )
+        recursive = {
+            ("ns1.example.net", "A"): _result(
+                "ns1.example.net",
+                "A",
+                DnsQueryState.ANSWER,
+                ("192.0.2.10", "192.0.2.11", "192.0.2.12"),
+            ),
+            ("ns1.example.net", "AAAA"): _result(
+                "ns1.example.net", "AAAA", DnsQueryState.NO_ANSWER,
+            ),
+        }
+        harness = _Harness(
+            "example.com",
+            recursive=recursive,
+            direct_map={
+                (
+                    "example.com", "NS", "ns1.example.net", "192.0.2.10",
+                    DnsTransport.UDP,
+                ): _result(
+                    "example.com", "NS", DnsQueryState.TIMEOUT,
+                    error="timeout",
+                    query_mode=DnsQueryMode.AUTHORITATIVE,
+                    transport=DnsTransport.UDP,
+                    server_name="ns1.example.net",
+                    server_ip="192.0.2.10",
+                ),
+                (
+                    "example.com", "NS", "ns1.example.net", "192.0.2.11",
+                    DnsTransport.UDP,
+                ): _result(
+                    "example.com", "NS", DnsQueryState.ANSWER,
+                    ("ns1.example.net.",),
+                    query_mode=DnsQueryMode.AUTHORITATIVE,
+                    transport=DnsTransport.UDP,
+                    server_name="ns1.example.net",
+                    server_ip="192.0.2.11",
+                    rcode="NOERROR",
+                    aa=True,
+                    tc=False,
+                ),
+            },
+        )
+
+        enriched = harness.collect_delegated_nameserver_evidence(evidence)
+        server = enriched.delegated_servers[0]
+
+        self.assertEqual(
+            server.probe_addresses,
+            ("192.0.2.10", "192.0.2.11"),
+        )
+        self.assertEqual(server.unprobed_addresses, ("192.0.2.12",))
+        self.assertEqual(len(server.authority_queries), 2)
+        self.assertTrue(server.has_authoritative_answer)
+        self.assertEqual(
+            harness.direct_timeouts,
+            [DELEGATION_DIRECT_TIMEOUT, DELEGATION_DIRECT_TIMEOUT],
+        )
+
+    def test_authority_probes_are_adaptive_globally_bounded_and_breadth_first(self):
         nameservers = tuple(
-            f"ns{i}.example.net" for i in range(1, 6)
+            f"ns{i}.example.net" for i in range(1, 11)
         )
         evidence = ParentDelegationEvidence(
             zone="example.com",
@@ -574,10 +647,7 @@ class DelegatedNameserverCollectionTest(unittest.TestCase):
                 name,
                 "A",
                 DnsQueryState.ANSWER,
-                tuple(
-                    f"192.0.{index}.{host}"
-                    for host in range(1, 5)
-                ),
+                (f"192.0.{index}.1", f"192.0.{index}.2"),
             )
             recursive[(name, "AAAA")] = _result(
                 name,
@@ -594,16 +664,21 @@ class DelegatedNameserverCollectionTest(unittest.TestCase):
         )
         self.assertEqual(total, MAX_DELEGATED_AUTHORITY_PROBES)
         self.assertEqual(len(harness.direct_calls), MAX_DELEGATED_AUTHORITY_PROBES)
-
-        # Breadth-first allocation means every NS receives three probes before
-        # the 16th global probe is allocated to the first NS.
+        self.assertTrue(
+            all(
+                len(server.probe_addresses) <= MAX_DELEGATED_ADDRESS_PROBES_PER_NS
+                for server in enriched.delegated_servers
+            )
+        )
+        # First round covers every delegated NS before any fallback probe.
+        self.assertTrue(
+            all(server.probe_addresses for server in enriched.delegated_servers)
+        )
         self.assertEqual(
             [len(server.probe_addresses) for server in enriched.delegated_servers],
-            [4, 3, 3, 3, 3],
+            [2, 2, 2, 2, 2, 2, 1, 1, 1, 1],
         )
-        self.assertTrue(
-            all(server.unprobed_addresses for server in enriched.delegated_servers[1:])
-        )
+
 
 
 class _ExistingDomainDnsStep:

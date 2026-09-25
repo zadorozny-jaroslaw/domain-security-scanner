@@ -7,7 +7,8 @@ from ...models import DnsQueryResult, DnsQueryState, DnsTransport
 
 
 MAX_PARENT_DELEGATION_ATTEMPTS = 4
-MAX_DELEGATED_ADDRESS_PROBES_PER_NS = 4
+DELEGATION_DIRECT_TIMEOUT = 1.5
+MAX_DELEGATED_ADDRESS_PROBES_PER_NS = 2
 MAX_DELEGATED_AUTHORITY_PROBES = 16
 
 
@@ -248,37 +249,6 @@ def referral_from_result(
     return DelegationReferral(nameservers=nameservers, glue=glue)
 
 
-def _select_authority_probe_addresses(
-    servers: list[
-        tuple[
-            str,
-            NameserverAddressEvidence,
-            DelegationGlueEvidence | None,
-            tuple[str, ...],
-        ]
-    ],
-) -> dict[str, tuple[str, ...]]:
-    """Allocate bounded direct probes fairly across delegated NS names.
-
-    Breadth is preferred over repeatedly testing many addresses for the first
-    nameserver. Each round assigns at most one additional address per NS until
-    the global and per-NS safety bounds are reached.
-    """
-    selected: dict[str, list[str]] = {name: [] for name, *_ in servers}
-    total = 0
-
-    for address_index in range(MAX_DELEGATED_ADDRESS_PROBES_PER_NS):
-        for name, _addresses, _glue, candidates in servers:
-            if total >= MAX_DELEGATED_AUTHORITY_PROBES:
-                return {key: tuple(values) for key, values in selected.items()}
-            if address_index >= len(candidates):
-                continue
-            selected[name].append(candidates[address_index])
-            total += 1
-
-    return {key: tuple(values) for key, values in selected.items()}
-
-
 class DelegationScanMixin:
     """Collect delegation evidence without emitting delegation findings yet."""
 
@@ -357,6 +327,7 @@ class DelegationScanMixin:
                     server_name=parent_ns,
                     server_ip=server_ip,
                     transport=DnsTransport.UDP,
+                    timeout=DELEGATION_DIRECT_TIMEOUT,
                 )
                 delegation_queries.append(result)
                 referral = referral_from_result(result, zone)
@@ -443,24 +414,54 @@ class DelegationScanMixin:
             )
             prepared.append((name, addresses, glue, candidates))
 
-        selected_by_name = _select_authority_probe_addresses(prepared)
-        delegated_servers: list[DelegatedNameserverEvidence] = []
+        # Issue #14 needs server-level authority proof, not exhaustive endpoint
+        # testing. Probe one deterministic endpoint per delegated NS first, then
+        # use at most one fallback endpoint only when the first probe did not
+        # positively establish authoritative service. This keeps every NS in the
+        # first round while avoiding slow duplicate IPv4/IPv6 probes on healthy
+        # multi-address providers. Exhaustive transport/family consistency belongs
+        # to issue #15.
+        probes_by_name: dict[str, list[str]] = {
+            name: [] for name, *_ in prepared
+        }
+        queries_by_name: dict[str, list[DnsQueryResult]] = {
+            name: [] for name, *_ in prepared
+        }
+        total_probes = 0
 
-        for name, addresses, glue, candidates in prepared:
-            probe_addresses = selected_by_name.get(name, ())
-            probe_set = set(probe_addresses)
-            unprobed = tuple(
-                address for address in candidates if address not in probe_set
-            )
-            authority_queries = tuple(
-                self.authoritative_dns_query_result(
+        for address_index in range(MAX_DELEGATED_ADDRESS_PROBES_PER_NS):
+            if total_probes >= MAX_DELEGATED_AUTHORITY_PROBES:
+                break
+            for name, _addresses, _glue, candidates in prepared:
+                if total_probes >= MAX_DELEGATED_AUTHORITY_PROBES:
+                    break
+                if address_index >= len(candidates):
+                    continue
+                if any(
+                    result.state == DnsQueryState.ANSWER and result.aa is True
+                    for result in queries_by_name[name]
+                ):
+                    continue
+
+                server_ip = candidates[address_index]
+                result = self.authoritative_dns_query_result(
                     evidence.zone,
                     "NS",
                     server_name=name,
                     server_ip=server_ip,
                     transport=DnsTransport.UDP,
+                    timeout=DELEGATION_DIRECT_TIMEOUT,
                 )
-                for server_ip in probe_addresses
+                probes_by_name[name].append(server_ip)
+                queries_by_name[name].append(result)
+                total_probes += 1
+
+        delegated_servers: list[DelegatedNameserverEvidence] = []
+        for name, addresses, glue, candidates in prepared:
+            probe_addresses = tuple(probes_by_name[name])
+            probe_set = set(probe_addresses)
+            unprobed = tuple(
+                address for address in candidates if address not in probe_set
             )
             delegated_servers.append(
                 DelegatedNameserverEvidence(
@@ -470,7 +471,7 @@ class DelegationScanMixin:
                     candidate_addresses=candidates,
                     probe_addresses=probe_addresses,
                     unprobed_addresses=unprobed,
-                    authority_queries=authority_queries,
+                    authority_queries=tuple(queries_by_name[name]),
                 )
             )
 
@@ -496,6 +497,7 @@ class DelegationScanMixin:
 
 __all__ = [
     "MAX_PARENT_DELEGATION_ATTEMPTS",
+    "DELEGATION_DIRECT_TIMEOUT",
     "MAX_DELEGATED_ADDRESS_PROBES_PER_NS",
     "MAX_DELEGATED_AUTHORITY_PROBES",
     "DelegatedNameserverEvidence",
