@@ -61,6 +61,11 @@ def main():
     parser.add_argument("--max-hosts", type=int, default=25, choices=range(1, 101))
     parser.add_argument("--out", default=None, help="Prefiks plików wyjściowych")
     parser.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Zapisz raport JSON bez generowania pliku PDF.",
+    )
+    parser.add_argument(
         "--scan",
         type=_parse_group_list,
         metavar="GROUPS",
@@ -126,12 +131,16 @@ def main():
 
     prefix = args.out or f"security-report-{scanner.target_domain}"
     json_path = Path(prefix + ".json")
-    pdf_path = Path(prefix + ".pdf")
 
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    generate_pdf(report, pdf_path)
+
+    pdf_path = None
+    if not args.json_only:
+        pdf_path = Path(prefix + ".pdf")
+        generate_pdf(report, pdf_path)
 
     print(f"[+] Score: {report['score']['score']}/100 ({report['score']['label']})")
     print(f"[+] JSON: {json_path}")
-    print(f"[+] PDF:  {pdf_path}")
+    if pdf_path is not None:
+        print(f"[+] PDF:  {pdf_path}")
     return 0
