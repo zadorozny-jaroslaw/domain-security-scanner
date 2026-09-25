@@ -4,12 +4,10 @@ import ipaddress
 import re
 from typing import Any, Optional
 
-import dns.exception
-import dns.resolver
 import requests
 
 from ...constants import COMMON_DKIM_SELECTORS, COMMON_DNS_TYPES, TIMEOUT
-from ...models import DnsQueryResult, DnsQueryState
+from ...models import DnsQueryResult
 from ...standards import (
     RFC_7505,
     RFC_8460,
@@ -23,53 +21,7 @@ from ...standards import (
 
 
 class MailScanMixin:
-    """Mail-security checks and shared DNS evidence helpers."""
-
-    def dns_query_result(self, host: str, rtype: str) -> DnsQueryResult:
-        """Return cached DNS evidence while preserving absence vs resolver failure."""
-        host_key = host.lower().rstrip(".")
-        rtype_key = rtype.upper()
-        cache_key = (host_key, rtype_key)
-        cached = self.dns_query_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        try:
-            ans = self.resolver.resolve(host_key, rtype_key, raise_on_no_answer=False)
-            if ans.rrset is None:
-                result = DnsQueryResult(host_key, rtype_key, DnsQueryState.NO_ANSWER)
-            else:
-                result = DnsQueryResult(
-                    host_key,
-                    rtype_key,
-                    DnsQueryState.ANSWER,
-                    tuple(r.to_text() for r in ans),
-                )
-        except dns.resolver.NXDOMAIN:
-            result = DnsQueryResult(host_key, rtype_key, DnsQueryState.NXDOMAIN)
-        except (dns.resolver.LifetimeTimeout, dns.exception.Timeout) as exc:
-            result = DnsQueryResult(host_key, rtype_key, DnsQueryState.TIMEOUT, error=str(exc))
-        except dns.resolver.NoNameservers as exc:
-            state = DnsQueryState.SERVFAIL if "SERVFAIL" in str(exc).upper() else DnsQueryState.ERROR
-            result = DnsQueryResult(host_key, rtype_key, state, error=str(exc))
-        except Exception as exc:
-            result = DnsQueryResult(host_key, rtype_key, DnsQueryState.ERROR, error=str(exc))
-
-        self.dns_query_cache[cache_key] = result
-        return result
-
-    def dns_query(self, host: str, rtype: str) -> list[str]:
-        """Compatibility wrapper returning only records for inventory/report output."""
-        return list(self.dns_query_result(host, rtype).records)
-
-    @staticmethod
-    def _dns_unavailable_message(result: DnsQueryResult) -> str:
-        labels = {
-            DnsQueryState.TIMEOUT: "timeout",
-            DnsQueryState.SERVFAIL: "SERVFAIL",
-            DnsQueryState.ERROR: "resolver error",
-        }
-        return labels.get(result.state, result.state.value)
+    """Mail-security checks built on shared DNS evidence infrastructure."""
 
     @staticmethod
     def _normalize_txt_record(value: str) -> str:

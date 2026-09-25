@@ -5,6 +5,7 @@ import unittest
 import dns.exception
 
 from domain_security_scanner.dns_evidence import DnsEvidenceMixin
+from domain_security_scanner.domains.mail import MailScanMixin
 from domain_security_scanner.models import DnsQueryState
 from domain_security_scanner.scanner import Scanner
 
@@ -51,6 +52,11 @@ class SharedDnsEvidenceTest(unittest.TestCase):
             Scanner._dns_unavailable_message,
             DnsEvidenceMixin._dns_unavailable_message,
         )
+
+    def test_mail_mixin_no_longer_owns_generic_dns_helpers(self):
+        self.assertNotIn("dns_query_result", MailScanMixin.__dict__)
+        self.assertNotIn("dns_query", MailScanMixin.__dict__)
+        self.assertNotIn("_dns_unavailable_message", MailScanMixin.__dict__)
 
     def test_recursive_cache_key_preserves_existing_identity(self):
         harness = _DnsEvidenceHarness()
