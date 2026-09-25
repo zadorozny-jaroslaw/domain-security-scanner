@@ -32,6 +32,7 @@ class DnsQueryState(StrEnum):
     NXDOMAIN = "nxdomain"
     TIMEOUT = "timeout"
     SERVFAIL = "servfail"
+    NOT_AUTHORITATIVE = "not_authoritative"
     TRUNCATED = "truncated"
     TRANSPORT_ERROR = "transport_error"
     ERROR = "error"
@@ -151,6 +152,7 @@ class DnsQueryResult:
         return self.state in {
             DnsQueryState.TIMEOUT,
             DnsQueryState.SERVFAIL,
+            DnsQueryState.NOT_AUTHORITATIVE,
             DnsQueryState.TRUNCATED,
             DnsQueryState.TRANSPORT_ERROR,
             DnsQueryState.ERROR,

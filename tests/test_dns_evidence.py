@@ -295,6 +295,66 @@ class AuthoritativeDnsQueryTest(unittest.TestCase):
         self.assertFalse(result.failed)
         self.assertFalse(result.tc)
 
+    def test_non_authoritative_noerror_is_inconclusive_not_absence(self):
+        harness = _DnsEvidenceHarness()
+        response = _response(
+            "example.com",
+            "SOA",
+            aa=False,
+            answer=(),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            return_value=response,
+        ):
+            result = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_name="ns1.example.net",
+                server_ip="192.0.2.53",
+            )
+
+        self.assertEqual(result.state, DnsQueryState.NOT_AUTHORITATIVE)
+        self.assertFalse(result.aa)
+        self.assertTrue(result.failed)
+        self.assertFalse(result.absent)
+        self.assertEqual(
+            result.error,
+            "DNS response was not authoritative (AA=0)",
+        )
+        self.assertEqual(
+            harness._dns_unavailable_message(result),
+            "non-authoritative response",
+        )
+
+    def test_non_authoritative_nxdomain_is_not_conclusive_absence(self):
+        harness = _DnsEvidenceHarness()
+        response = _response(
+            "missing.example.com",
+            "A",
+            rcode=dns.rcode.NXDOMAIN,
+            aa=False,
+            answer=(),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            return_value=response,
+        ):
+            result = harness.authoritative_dns_query_result(
+                "missing.example.com",
+                "A",
+                server_name="ns1.example.net",
+                server_ip="192.0.2.53",
+            )
+
+        self.assertEqual(result.state, DnsQueryState.NOT_AUTHORITATIVE)
+        self.assertFalse(result.aa)
+        self.assertTrue(result.failed)
+        self.assertFalse(result.absent)
+        self.assertEqual(result.rcode, "NXDOMAIN")
+
     def test_udp_truncation_is_inconclusive_and_not_absence(self):
         harness = _DnsEvidenceHarness()
         response = _response(

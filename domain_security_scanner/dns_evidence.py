@@ -217,6 +217,18 @@ class DnsEvidenceMixin:
             return DnsQueryState.TRUNCATED
 
         rcode = response.rcode()
+        if rcode == dns.rcode.SERVFAIL:
+            return DnsQueryState.SERVFAIL
+
+        # NOERROR/NXDOMAIN only become conclusive authoritative evidence when
+        # the target server actually sets AA. An AA=0 response can be a referral,
+        # cache/intermediary response, or evidence that this server is not
+        # authoritative for the queried name; it must never become record absence.
+        if rcode in {dns.rcode.NOERROR, dns.rcode.NXDOMAIN} and not (
+            response.flags & dns.flags.AA
+        ):
+            return DnsQueryState.NOT_AUTHORITATIVE
+
         if rcode == dns.rcode.NOERROR:
             return (
                 DnsQueryState.ANSWER
@@ -225,8 +237,6 @@ class DnsEvidenceMixin:
             )
         if rcode == dns.rcode.NXDOMAIN:
             return DnsQueryState.NXDOMAIN
-        if rcode == dns.rcode.SERVFAIL:
-            return DnsQueryState.SERVFAIL
         return DnsQueryState.ERROR
 
     def authoritative_dns_query_result(
@@ -290,6 +300,8 @@ class DnsEvidenceMixin:
             state = self._authoritative_state(response)
             if state == DnsQueryState.TRUNCATED:
                 error = "DNS response was truncated; retry explicitly over TCP"
+            elif state == DnsQueryState.NOT_AUTHORITATIVE:
+                error = "DNS response was not authoritative (AA=0)"
             elif state == DnsQueryState.ERROR:
                 error = f"DNS RCODE {dns.rcode.to_text(response.rcode())}"
 
@@ -350,6 +362,7 @@ class DnsEvidenceMixin:
         labels = {
             DnsQueryState.TIMEOUT: "timeout",
             DnsQueryState.SERVFAIL: "SERVFAIL",
+            DnsQueryState.NOT_AUTHORITATIVE: "non-authoritative response",
             DnsQueryState.TRUNCATED: "truncated response",
             DnsQueryState.TRANSPORT_ERROR: "transport error",
             DnsQueryState.ERROR: "resolver error",
