@@ -18,6 +18,47 @@ class StandardReference:
         return f"RFC {self.number}"
 
 
+RFC_1034 = StandardReference(
+    key="RFC1034",
+    number=1034,
+    title="Domain names - concepts and facilities",
+    url="https://www.rfc-editor.org/info/rfc1034",
+    scope="DNS / delegation, zone cuts, referrals, and glue",
+)
+
+RFC_1035 = StandardReference(
+    key="RFC1035",
+    number=1035,
+    title="Domain names - implementation and specification",
+    url="https://www.rfc-editor.org/info/rfc1035",
+    scope="DNS / message and resource-record semantics",
+)
+
+RFC_1912 = StandardReference(
+    key="RFC1912",
+    number=1912,
+    title="Common DNS Operational and Configuration Errors",
+    url="https://www.rfc-editor.org/info/rfc1912",
+    scope="DNS / operational delegation and lame-server guidance",
+)
+
+RFC_2181 = StandardReference(
+    key="RFC2181",
+    number=2181,
+    title="Clarifications to the DNS Specification",
+    url="https://www.rfc-editor.org/info/rfc2181",
+    scope="DNS / NS target canonical-name requirements",
+)
+
+RFC_2182 = StandardReference(
+    key="RFC2182",
+    number=2182,
+    title="Selection and Operation of Secondary DNS Servers",
+    url="https://www.rfc-editor.org/info/rfc2182",
+    scope="DNS / authoritative-server redundancy and reachability",
+)
+
+
 RFC_3986 = StandardReference(
     key="RFC3986",
     number=3986,
@@ -114,6 +155,14 @@ RFC_9116 = StandardReference(
     scope="Web / security.txt",
 )
 
+RFC_9471 = StandardReference(
+    key="RFC9471",
+    number=9471,
+    title="DNS Glue Requirements in Referral Responses",
+    url="https://www.rfc-editor.org/info/rfc9471",
+    scope="DNS / glue requirements in referral responses",
+)
+
 RFC_10025 = StandardReference(
     key="RFC10025",
     number=10025,
@@ -126,6 +175,11 @@ RFC_10025 = StandardReference(
 STANDARD_REFERENCES: dict[str, StandardReference] = {
     ref.key: ref
     for ref in (
+        RFC_1034,
+        RFC_1035,
+        RFC_1912,
+        RFC_2181,
+        RFC_2182,
         RFC_3986,
         RFC_6797,
         RFC_7505,
@@ -138,6 +192,7 @@ STANDARD_REFERENCES: dict[str, StandardReference] = {
         RFC_9111,
         RFC_9112,
         RFC_9116,
+        RFC_9471,
         RFC_10025,
     )
 }

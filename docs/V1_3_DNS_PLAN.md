@@ -102,6 +102,8 @@ See [DNS_EVIDENCE.md](DNS_EVIDENCE.md) for the implemented evidence model and fa
 
 ## Workstream 2 - Delegation and authoritative nameservers
 
+**Status: implemented in issue #14.**
+
 ### Checks
 
 #### Nameserver redundancy
@@ -154,6 +156,25 @@ Detect invalid/problematic NS targets that resolve through CNAME-style aliasing 
 - RFC 1912
 - RFC 2181
 - RFC 2182
+- RFC 9471
+
+### Implemented foundation
+
+- Parent-side delegation is obtained independently from the child's normal recursive apex NS inventory.
+- The collector resolves the immediate parent zone's NS set, reaches a parent authoritative server directly, and extracts the child referral NS/glue from authority/additional sections.
+- Every delegated NS retains recursive A, AAAA, and CNAME evidence.
+- Candidate direct-query endpoints combine resolved addresses with observed referral glue, while resolver/network failures remain distinguishable from conclusive no-address evidence.
+- Direct delegated-server authority checks are UDP-only in #14 and are bounded: one deterministic endpoint is tried first and at most one fallback endpoint is used when the first probe does not positively establish authority.
+- Child apex NS views are accepted only from positive direct authoritative answers with `AA=1`.
+- Parent/child mismatch is represented explicitly but reported conservatively because migrations can produce temporary differences; incomplete evidence remains unknown.
+- A delegated server is only classified as lame from positive non-authoritative evidence that is sufficient at the server level. Timeout/unreachable evidence remains unknown.
+- In-bailiwick glue presence is recorded and compared with observed current addresses where resolver evidence is usable; out-of-bailiwick NS names do not require parent glue.
+- Delegated NS targets are checked for CNAME-style aliasing.
+- The existing weighted nameserver-redundancy check now uses the parent delegation instead of only RDAP nameserver metadata.
+- New detailed delegation findings remain non-scoring until the v1.3 JSON/PDF/scoring integration work.
+- Structured delegation evidence and analysis are retained internally; richer additive public JSON/PDF serialization remains part of the later integration workstream.
+
+See [DNS_DELEGATION.md](DNS_DELEGATION.md) for implementation details and conservative result semantics.
 
 ## Workstream 3 - Authoritative transport and consistency
 

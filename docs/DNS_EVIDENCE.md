@@ -121,6 +121,36 @@ Recursive lookups leave transport/server fields unset because the high-level
 resolver may choose or retry transport internally. Direct authoritative queries
 always record the explicit transport and server endpoint.
 
+## Delegation evidence built on this layer
+
+Issue #14 now uses the shared evidence primitives to build structured delegation
+state in `domain_security_scanner/domains/domain/delegation.py` and pure analysis
+in `delegation_analysis.py`.
+
+The delegation collector:
+
+- obtains the immediate parent-side referral independently from the child's
+  recursive apex NS result;
+- retains the parent referral's delegated NS names and glue;
+- records recursive A/AAAA/CNAME evidence for every delegated NS;
+- combines resolved addresses and observed referral glue into usable endpoint
+  candidates without treating lookup failure as confirmed no-address;
+- performs bounded direct UDP apex-NS queries against delegated servers;
+- keeps per-server and per-endpoint query evidence rather than promoting one
+  endpoint failure into a zone-wide conclusion.
+
+The analyzer derives parent/child NS consistency only from positively
+authoritative (`AA=1`) child apex NS answers. A timeout, transport failure, or
+incomplete endpoint sample remains unknown. A nameserver is only classified as
+lame when positive non-authoritative evidence is sufficient and no retained
+unprobed endpoint could still change that server-level conclusion.
+
+The scanner currently retains this richer delegation evidence internally and
+emits the #14 user-facing Domain findings. Additive public JSON/PDF exposure of
+the richer DNS structure remains part of the v1.3 integration work.
+
+See [DNS_DELEGATION.md](DNS_DELEGATION.md) for the complete #14 model.
+
 ## Safety and scope
 
 The evidence layer is low-impact infrastructure. It does not itself enumerate
@@ -132,9 +162,10 @@ all authoritative servers or perform broad probing. It does not perform:
 - high-volume recursion tests;
 - malformed-packet testing.
 
-Later v1.3 checks can build delegation, transport, consistency, DNSSEC, CAA,
-negative-DNS, and recursion analysis on this evidence layer while retaining the
-same conservative failure semantics.
+Issue #14 now builds delegation and delegated-nameserver posture on this
+evidence layer. Later v1.3 checks can add transport consistency, DNSSEC, CAA,
+negative-DNS, and recursion analysis while retaining the same conservative
+failure semantics.
 
 ## Standards context
 

@@ -32,6 +32,20 @@ See [SCAN_GROUPS.md](SCAN_GROUPS.md) for selection, prerequisite, and orchestrat
 
 Discovery and CMS include useful evidence and findings, but not every observation has a positive score weight. The exact weights live alongside the checks in the `domain_security_scanner` package so the report always reflects the code that generated it.
 
+## v1.3 delegation integration status
+
+Issue #14 changes the evidence source for the existing **Name server redundancy** check: its existing 3-point weight is now based on the parent-side DNS delegation when that evidence is available, rather than only on RDAP nameserver metadata.
+
+The new detailed delegation findings are currently non-scoring (`weight=0`):
+
+- DNS delegation consistency;
+- Delegated nameserver authority;
+- Nameserver addressability;
+- Delegation glue;
+- Nameserver target aliasing.
+
+Unavailable parent referrals, resolver failures, timeouts, and otherwise incomplete evidence remain `UNKNOWN`/not applicable and do not reduce the score. Weight calibration for the richer v1.3 DNS findings is intentionally deferred to the dedicated JSON/PDF/scoring integration work so scoring is changed once, with the complete DNS evidence model in view.
+
 ## Interpreting the score
 
 The current labels are intentionally broad:

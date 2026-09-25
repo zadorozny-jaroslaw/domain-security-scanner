@@ -20,7 +20,7 @@ The example below was generated against a maintainer-controlled WordPress test h
 
 - Exact web-target checks while registration and mail checks follow the registered/root domain
 - Selectable scan groups for domain, discovery, mail, TLS, web, and CMS checks
-- RDAP, DNSSEC, CAA, nameserver and expiry checks
+- RDAP, parent delegation, per-nameserver authority/addressability, DNSSEC, CAA, and expiry checks
 - Certificate Transparency subdomain discovery through `crt.sh`
 - DNS inventory with resolver-error awareness, live/historical hostname separation, and same-site crawling
 - HTTPS/TLS certificate analysis and legacy TLS detection
@@ -142,7 +142,7 @@ The public scan groups are:
 
 | Group | Main responsibility |
 | --- | --- |
-| `domain` | registered/root-domain posture: RDAP, expiry, registrar, nameservers, DNSSEC, CAA |
+| `domain` | registered/root-domain posture: RDAP, expiry, registrar, DNS delegation/nameservers, DNSSEC, CAA |
 | `discovery` | external attack-surface discovery: Certificate Transparency, crawl, DNS inventory, live/historical host classification |
 | `mail` | MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT |
 | `tls` | HTTPS certificate, expiry, negotiated TLS/cipher, legacy TLS support |
@@ -185,10 +185,17 @@ This avoids treating a website subdomain as if it were the organization's mail d
 - registrar and nameservers
 - domain-expiry visibility
 - transfer-prohibited status where externally visible
+- parent-side DNS delegation and nameserver redundancy
+- parent/child NS consistency from direct authoritative child responses
+- per-delegated-NS `A`/`AAAA` addressability and bounded direct authority checks
+- in-bailiwick delegation glue presence and observed address consistency
+- delegated NS target CNAME/alias detection
 - DNSSEC indication (`DS` / RDAP)
 - CAA
 - `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `CAA`, and selected `DS` records
 - passive Certificate Transparency hostname discovery
+
+See [docs/DNS_DELEGATION.md](docs/DNS_DELEGATION.md) for the v1.3 delegation evidence model, conservative failure semantics, and current reporting/scoring boundaries.
 
 Discovered hosts are grouped in reports as **current DNS**, **historical CT**, **currently unresolved**, **DNS status unknown**, or **not DNS-assessed**. Historical classification is conservative: a CT-discovered name is only labelled historical when current DNS returns NXDOMAIN. The existing `subdomains` JSON list remains the complete discovered-name list, while the additive `host_inventory` object provides these clearer groups.
 
@@ -301,6 +308,7 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
 - RFC 8288 `Link` targets are inventoried but not dereferenced, and RFC 7838 `Alt-Svc` alternatives are not contacted or certificate-validated.
 - RFC 9112 coverage is intentionally passive: it inspects HTTP version and framing headers exposed by `requests`/urllib3, but does not validate raw status/header bytes, chunk boundaries, trailers, exact body length, premature EOF, or request-smuggling behavior.
+- v1.3 delegation checks use bounded representative direct queries per delegated NS; exhaustive per-address UDP/TCP, SOA, NS and EDNS consistency is handled by the separate authoritative-consistency workstream.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
 - Passive CMS detection can miss intentionally hidden or heavily proxied platforms.
 - Partial-scope scores summarize only the selected groups and should not be interpreted as equivalent to a full-scan score.
@@ -325,7 +333,7 @@ domain_security_scanner/
 ├── scanner.py                        # Scanner composition, execution, scoring, serialization
 ├── cli.py                            # argument parsing and output handling
 ├── domains/
-│   ├── domain/                       # RDAP and authoritative/root DNS posture
+│   ├── domain/                       # RDAP, delegation and authoritative/root DNS posture
 │   ├── discovery/                    # CT discovery, crawl, DNS host inventory
 │   ├── mail/                         # MX/SPF/DMARC/DKIM/MTA-STS/TLS-RPT
 │   ├── tls/                          # certificate and TLS protocol checks

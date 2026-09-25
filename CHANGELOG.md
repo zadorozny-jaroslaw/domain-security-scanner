@@ -14,6 +14,10 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Capture authoritative DNS RCODE, AA/TC flags, EDNS metadata, answer/authority/additional sections, elapsed time, and server context.
 - Add query-context cache identities that separate recursive vs authoritative evidence, authoritative server endpoints, and UDP vs TCP.
 - Add explicit non-authoritative, truncated, transport-failure, and other unavailable-evidence states so they cannot be mistaken for record absence.
+- Add parent-side delegation discovery from direct parent referrals, including delegated NS and referral glue evidence.
+- Add per-delegated-nameserver A/AAAA/CNAME evidence plus bounded direct UDP authority probes.
+- Add pure delegation analysis for parent/child NS consistency, lame delegation, nameserver addressability, in-bailiwick glue, and NS target aliasing.
+- Add user-facing Domain findings for delegation consistency, delegated nameserver authority, nameserver addressability, delegation glue, and nameserver target aliasing.
 
 ### Changed
 
@@ -21,6 +25,10 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Require authoritative negative DNS evidence to set AA and include SOA evidence before `NO_ANSWER` or `NXDOMAIN` is treated as conclusive absence.
 - Keep direct authoritative failures scoped to the queried server/transport instead of promoting one server failure into a zone-wide conclusion.
 - Preserve the existing recursive `dns_query_result()` / `dns_query()` interfaces and current public JSON fields while the richer v1.3 DNS model is integrated incrementally.
+- Base the existing weighted nameserver-redundancy check on the observed parent delegation instead of only RDAP nameserver metadata.
+- Keep resolver/network failures and incomplete delegated-server evidence as `UNKNOWN`; only positive non-authoritative evidence can support a lame-delegation conclusion.
+- Bound #14 direct authority probing to representative endpoints and stop after positive authority evidence, while retaining unprobed endpoint evidence for later transport/consistency work.
+- Keep the new detailed delegation findings non-scoring until the v1.3 JSON/PDF/scoring integration work calibrates their weights.
 
 ## [1.2.0] - 2026-09-24
 
