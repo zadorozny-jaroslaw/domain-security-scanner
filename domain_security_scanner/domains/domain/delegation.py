@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from ...models import DnsQueryResult, DnsTransport
+from ...models import DnsQueryResult, DnsQueryState, DnsTransport
 
 
 MAX_PARENT_DELEGATION_ATTEMPTS = 4
+MAX_DELEGATED_ADDRESS_PROBES_PER_NS = 4
+MAX_DELEGATED_AUTHORITY_PROBES = 16
 
 
 def normalize_dns_name(value: str) -> str:
@@ -25,7 +27,7 @@ def parent_zone_name(zone: str) -> str | None:
 
 @dataclass(frozen=True)
 class NameserverAddressEvidence:
-    """Recursive address evidence used to reach one parent authoritative server."""
+    """Recursive A/AAAA evidence for one DNS server name."""
 
     name: str
     ipv4: tuple[str, ...] = ()
@@ -37,6 +39,23 @@ class NameserverAddressEvidence:
     def addresses(self) -> tuple[str, ...]:
         return self.ipv4 + self.ipv6
 
+    @property
+    def lookup_failed(self) -> bool:
+        """Whether either address-family lookup produced unavailable evidence."""
+        return any(
+            result is not None and result.failed
+            for result in (self.a_result, self.aaaa_result)
+        )
+
+    @property
+    def conclusively_no_address(self) -> bool:
+        """Whether both A and AAAA are conclusively absent."""
+        results = (self.a_result, self.aaaa_result)
+        return (
+            not self.addresses
+            and all(result is not None and result.absent for result in results)
+        )
+
 
 @dataclass(frozen=True)
 class DelegationGlueEvidence:
@@ -45,6 +64,10 @@ class DelegationGlueEvidence:
     name: str
     ipv4: tuple[str, ...] = ()
     ipv6: tuple[str, ...] = ()
+
+    @property
+    def addresses(self) -> tuple[str, ...]:
+        return self.ipv4 + self.ipv6
 
 
 @dataclass(frozen=True)
@@ -56,8 +79,33 @@ class DelegationReferral:
 
 
 @dataclass(frozen=True)
+class DelegatedNameserverEvidence:
+    """Reachability and direct-authority evidence for one delegated NS name."""
+
+    name: str
+    addresses: NameserverAddressEvidence
+    glue: DelegationGlueEvidence | None = None
+    candidate_addresses: tuple[str, ...] = ()
+    probe_addresses: tuple[str, ...] = ()
+    unprobed_addresses: tuple[str, ...] = ()
+    authority_queries: tuple[DnsQueryResult, ...] = ()
+
+    @property
+    def has_usable_address(self) -> bool:
+        return bool(self.candidate_addresses)
+
+    @property
+    def has_authoritative_answer(self) -> bool:
+        """Whether at least one tested address positively served authoritative NS."""
+        return any(
+            result.state == DnsQueryState.ANSWER and result.aa is True
+            for result in self.authority_queries
+        )
+
+
+@dataclass(frozen=True)
 class ParentDelegationEvidence:
-    """Internal parent-side delegation evidence for one registered/root domain."""
+    """Internal delegation evidence for one registered/root domain."""
 
     zone: str
     parent_zone: str | None
@@ -69,6 +117,7 @@ class ParentDelegationEvidence:
     glue: tuple[DelegationGlueEvidence, ...] = ()
     source_server_name: str | None = None
     source_server_ip: str | None = None
+    delegated_servers: tuple[DelegatedNameserverEvidence, ...] = ()
     error: str | None = None
 
     @property
@@ -95,6 +144,25 @@ def _canonical_ip_records(
         if address.version == version:
             values.add(str(address))
     return tuple(sorted(values))
+
+
+def _canonical_address_union(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    """Return unique canonical IP addresses with IPv4 before IPv6."""
+    ipv4: set[str] = set()
+    ipv6: set[str] = set()
+
+    for group in groups:
+        for value in group:
+            try:
+                address = ipaddress.ip_address(str(value).strip())
+            except ValueError:
+                continue
+            if address.version == 4:
+                ipv4.add(str(address))
+            else:
+                ipv6.add(str(address))
+
+    return tuple(sorted(ipv4)) + tuple(sorted(ipv6))
 
 
 def _section_records(
@@ -179,21 +247,49 @@ def referral_from_result(
     return DelegationReferral(nameservers=nameservers, glue=glue)
 
 
+def _select_authority_probe_addresses(
+    servers: list[
+        tuple[
+            str,
+            NameserverAddressEvidence,
+            DelegationGlueEvidence | None,
+            tuple[str, ...],
+        ]
+    ],
+) -> dict[str, tuple[str, ...]]:
+    """Allocate bounded direct probes fairly across delegated NS names.
+
+    Breadth is preferred over repeatedly testing many addresses for the first
+    nameserver. Each round assigns at most one additional address per NS until
+    the global and per-NS safety bounds are reached.
+    """
+    selected: dict[str, list[str]] = {name: [] for name, *_ in servers}
+    total = 0
+
+    for address_index in range(MAX_DELEGATED_ADDRESS_PROBES_PER_NS):
+        for name, _addresses, _glue, candidates in servers:
+            if total >= MAX_DELEGATED_AUTHORITY_PROBES:
+                return {key: tuple(values) for key, values in selected.items()}
+            if address_index >= len(candidates):
+                continue
+            selected[name].append(candidates[address_index])
+            total += 1
+
+    return {key: tuple(values) for key, values in selected.items()}
+
+
 class DelegationScanMixin:
-    """Collect parent-side delegation evidence without emitting findings yet."""
+    """Collect delegation evidence without emitting delegation findings yet."""
 
     def collect_domain_dns(self):
         """Collect delegation evidence before the existing Domain DNS step."""
-        self.collect_parent_delegation()
+        evidence = self.collect_parent_delegation()
+        if evidence is not None:
+            self.collect_delegated_nameserver_evidence(evidence)
         return super().collect_domain_dns()
 
     def collect_parent_delegation(self) -> ParentDelegationEvidence:
-        """Collect a bounded, direct parent referral for ``root_domain``.
-
-        This first #14 slice intentionally stops at parent-side evidence. Child
-        nameserver addressability, per-delegated-server authority checks, and
-        delegation findings are added in later slices.
-        """
+        """Collect a bounded, direct parent referral for ``root_domain``."""
         zone = normalize_dns_name(self.root_domain)
         parent_zone = parent_zone_name(zone)
         if parent_zone is None:
@@ -293,9 +389,100 @@ class DelegationScanMixin:
         self.delegation = evidence
         return evidence
 
+    def collect_delegated_nameserver_evidence(
+        self,
+        evidence: ParentDelegationEvidence,
+    ) -> ParentDelegationEvidence:
+        """Collect per-delegated-NS A/AAAA and direct authority evidence.
+
+        Recursive A/AAAA results are retained even when they fail so later
+        analysis can distinguish a confirmed lack of addresses from unavailable
+        resolver evidence. Parent-referral glue is also retained and can provide
+        a usable direct-query endpoint when recursive resolution is unavailable.
+
+        Direct authority testing is intentionally UDP-only here. TCP/UDP
+        transport comparison belongs to issue #15.
+        """
+        if not evidence.delegated_nameservers:
+            self.delegation = evidence
+            return evidence
+
+        glue_by_name = {item.name: item for item in evidence.glue}
+        prepared: list[
+            tuple[
+                str,
+                NameserverAddressEvidence,
+                DelegationGlueEvidence | None,
+                tuple[str, ...],
+            ]
+        ] = []
+
+        for nameserver in evidence.delegated_nameservers:
+            name = normalize_dns_name(nameserver)
+            a_result = self.dns_query_result(name, "A")
+            aaaa_result = self.dns_query_result(name, "AAAA")
+            ipv4 = _canonical_ip_records(a_result.records, version=4)
+            ipv6 = _canonical_ip_records(aaaa_result.records, version=6)
+            addresses = NameserverAddressEvidence(
+                name=name,
+                ipv4=ipv4,
+                ipv6=ipv6,
+                a_result=a_result,
+                aaaa_result=aaaa_result,
+            )
+            glue = glue_by_name.get(name)
+            candidates = _canonical_address_union(
+                addresses.ipv4,
+                addresses.ipv6,
+                glue.ipv4 if glue else (),
+                glue.ipv6 if glue else (),
+            )
+            prepared.append((name, addresses, glue, candidates))
+
+        selected_by_name = _select_authority_probe_addresses(prepared)
+        delegated_servers: list[DelegatedNameserverEvidence] = []
+
+        for name, addresses, glue, candidates in prepared:
+            probe_addresses = selected_by_name.get(name, ())
+            probe_set = set(probe_addresses)
+            unprobed = tuple(
+                address for address in candidates if address not in probe_set
+            )
+            authority_queries = tuple(
+                self.authoritative_dns_query_result(
+                    evidence.zone,
+                    "NS",
+                    server_name=name,
+                    server_ip=server_ip,
+                    transport=DnsTransport.UDP,
+                )
+                for server_ip in probe_addresses
+            )
+            delegated_servers.append(
+                DelegatedNameserverEvidence(
+                    name=name,
+                    addresses=addresses,
+                    glue=glue,
+                    candidate_addresses=candidates,
+                    probe_addresses=probe_addresses,
+                    unprobed_addresses=unprobed,
+                    authority_queries=authority_queries,
+                )
+            )
+
+        enriched = replace(
+            evidence,
+            delegated_servers=tuple(delegated_servers),
+        )
+        self.delegation = enriched
+        return enriched
+
 
 __all__ = [
     "MAX_PARENT_DELEGATION_ATTEMPTS",
+    "MAX_DELEGATED_ADDRESS_PROBES_PER_NS",
+    "MAX_DELEGATED_AUTHORITY_PROBES",
+    "DelegatedNameserverEvidence",
     "DelegationGlueEvidence",
     "DelegationReferral",
     "DelegationScanMixin",

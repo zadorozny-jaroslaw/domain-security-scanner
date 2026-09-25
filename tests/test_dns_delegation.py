@@ -1,8 +1,11 @@
 import unittest
 
 from domain_security_scanner.domains.domain.delegation import (
+    MAX_DELEGATED_AUTHORITY_PROBES,
     MAX_PARENT_DELEGATION_ATTEMPTS,
+    DelegationGlueEvidence,
     DelegationScanMixin,
+    ParentDelegationEvidence,
     parent_zone_name,
     referral_from_result,
 )
@@ -50,10 +53,17 @@ def _result(
 
 
 class _Harness(DelegationScanMixin):
-    def __init__(self, root_domain, recursive=None, direct=None):
+    def __init__(
+        self,
+        root_domain,
+        recursive=None,
+        direct=None,
+        direct_map=None,
+    ):
         self.root_domain = root_domain
         self.recursive = recursive or {}
         self.direct = list(direct or ())
+        self.direct_map = direct_map or {}
         self.recursive_calls = []
         self.direct_calls = []
         self.delegation = None
@@ -76,15 +86,16 @@ class _Harness(DelegationScanMixin):
         transport=DnsTransport.UDP,
         timeout=3.0,
     ):
-        self.direct_calls.append(
-            (
-                host.lower().rstrip("."),
-                rtype.upper(),
-                server_name,
-                server_ip,
-                DnsTransport(transport),
-            )
+        key = (
+            host.lower().rstrip("."),
+            rtype.upper(),
+            server_name,
+            server_ip,
+            DnsTransport(transport),
         )
+        self.direct_calls.append(key)
+        if key in self.direct_map:
+            return self.direct_map[key]
         if self.direct:
             return self.direct.pop(0)
         return _result(
@@ -307,6 +318,292 @@ class ParentDelegationCollectionTest(unittest.TestCase):
         self.assertNotIn(("p5.parent.example", "A"), harness.recursive_calls)
 
 
+class DelegatedNameserverCollectionTest(unittest.TestCase):
+    @staticmethod
+    def _base_evidence(*, glue=()):
+        return ParentDelegationEvidence(
+            zone="example.com",
+            parent_zone="com",
+            delegated_nameservers=("ns1.example.net", "ns2.example.net"),
+            glue=tuple(glue),
+            source_server_name="a.gtld-servers.net",
+            source_server_ip="192.0.2.53",
+        )
+
+    def test_collects_a_aaaa_and_direct_authority_per_delegated_ns(self):
+        evidence = self._base_evidence()
+        recursive = {
+            ("ns1.example.net", "A"): _result(
+                "ns1.example.net", "A", DnsQueryState.ANSWER,
+                ("192.0.2.10",),
+            ),
+            ("ns1.example.net", "AAAA"): _result(
+                "ns1.example.net", "AAAA", DnsQueryState.ANSWER,
+                ("2001:db8::10",),
+            ),
+            ("ns2.example.net", "A"): _result(
+                "ns2.example.net", "A", DnsQueryState.ANSWER,
+                ("192.0.2.20",),
+            ),
+            ("ns2.example.net", "AAAA"): _result(
+                "ns2.example.net", "AAAA", DnsQueryState.NO_ANSWER,
+            ),
+        }
+        direct_map = {}
+        for name, address in (
+            ("ns1.example.net", "192.0.2.10"),
+            ("ns1.example.net", "2001:db8::10"),
+            ("ns2.example.net", "192.0.2.20"),
+        ):
+            key = (
+                "example.com", "NS", name, address, DnsTransport.UDP
+            )
+            direct_map[key] = _result(
+                "example.com",
+                "NS",
+                DnsQueryState.ANSWER,
+                ("ns1.example.net.", "ns2.example.net."),
+                query_mode=DnsQueryMode.AUTHORITATIVE,
+                transport=DnsTransport.UDP,
+                server_name=name,
+                server_ip=address,
+                rcode="NOERROR",
+                aa=True,
+                tc=False,
+            )
+
+        harness = _Harness(
+            "example.com",
+            recursive=recursive,
+            direct_map=direct_map,
+        )
+        enriched = harness.collect_delegated_nameserver_evidence(evidence)
+
+        self.assertEqual(len(enriched.delegated_servers), 2)
+        first, second = enriched.delegated_servers
+
+        self.assertEqual(first.name, "ns1.example.net")
+        self.assertEqual(first.addresses.ipv4, ("192.0.2.10",))
+        self.assertEqual(first.addresses.ipv6, ("2001:db8::10",))
+        self.assertEqual(
+            first.candidate_addresses,
+            ("192.0.2.10", "2001:db8::10"),
+        )
+        self.assertEqual(first.probe_addresses, first.candidate_addresses)
+        self.assertEqual(len(first.authority_queries), 2)
+        self.assertTrue(first.has_authoritative_answer)
+
+        self.assertEqual(second.addresses.ipv4, ("192.0.2.20",))
+        self.assertEqual(second.addresses.ipv6, ())
+        self.assertEqual(second.probe_addresses, ("192.0.2.20",))
+        self.assertEqual(len(second.authority_queries), 1)
+        self.assertTrue(second.has_authoritative_answer)
+
+        self.assertEqual(
+            harness.recursive_calls,
+            [
+                ("ns1.example.net", "A"),
+                ("ns1.example.net", "AAAA"),
+                ("ns2.example.net", "A"),
+                ("ns2.example.net", "AAAA"),
+            ],
+        )
+        self.assertIs(harness.delegation, enriched)
+
+    def test_glue_can_supply_endpoint_when_recursive_lookup_is_unavailable(self):
+        glue = DelegationGlueEvidence(
+            name="ns1.example.net",
+            ipv4=("192.0.2.10",),
+        )
+        evidence = self._base_evidence(glue=(glue,))
+        recursive = {
+            ("ns1.example.net", "A"): _result(
+                "ns1.example.net",
+                "A",
+                DnsQueryState.TIMEOUT,
+                error="timeout",
+            ),
+            ("ns1.example.net", "AAAA"): _result(
+                "ns1.example.net",
+                "AAAA",
+                DnsQueryState.TIMEOUT,
+                error="timeout",
+            ),
+            ("ns2.example.net", "A"): _result(
+                "ns2.example.net", "A", DnsQueryState.NO_ANSWER,
+            ),
+            ("ns2.example.net", "AAAA"): _result(
+                "ns2.example.net", "AAAA", DnsQueryState.NO_ANSWER,
+            ),
+        }
+        authority = _result(
+            "example.com",
+            "NS",
+            DnsQueryState.ANSWER,
+            ("ns1.example.net.", "ns2.example.net."),
+            query_mode=DnsQueryMode.AUTHORITATIVE,
+            transport=DnsTransport.UDP,
+            server_name="ns1.example.net",
+            server_ip="192.0.2.10",
+            rcode="NOERROR",
+            aa=True,
+            tc=False,
+        )
+        harness = _Harness(
+            "example.com",
+            recursive=recursive,
+            direct_map={
+                (
+                    "example.com",
+                    "NS",
+                    "ns1.example.net",
+                    "192.0.2.10",
+                    DnsTransport.UDP,
+                ): authority
+            },
+        )
+
+        enriched = harness.collect_delegated_nameserver_evidence(evidence)
+        first, second = enriched.delegated_servers
+
+        self.assertTrue(first.addresses.lookup_failed)
+        self.assertFalse(first.addresses.conclusively_no_address)
+        self.assertEqual(first.addresses.addresses, ())
+        self.assertEqual(first.candidate_addresses, ("192.0.2.10",))
+        self.assertEqual(first.probe_addresses, ("192.0.2.10",))
+        self.assertTrue(first.has_authoritative_answer)
+
+        self.assertFalse(second.addresses.lookup_failed)
+        self.assertTrue(second.addresses.conclusively_no_address)
+        self.assertFalse(second.has_usable_address)
+        self.assertEqual(second.authority_queries, ())
+
+    def test_non_authoritative_and_timeout_results_remain_distinct(self):
+        evidence = self._base_evidence()
+        recursive = {
+            ("ns1.example.net", "A"): _result(
+                "ns1.example.net", "A", DnsQueryState.ANSWER,
+                ("192.0.2.10",),
+            ),
+            ("ns1.example.net", "AAAA"): _result(
+                "ns1.example.net", "AAAA", DnsQueryState.NO_ANSWER,
+            ),
+            ("ns2.example.net", "A"): _result(
+                "ns2.example.net", "A", DnsQueryState.ANSWER,
+                ("192.0.2.20",),
+            ),
+            ("ns2.example.net", "AAAA"): _result(
+                "ns2.example.net", "AAAA", DnsQueryState.NO_ANSWER,
+            ),
+        }
+        harness = _Harness(
+            "example.com",
+            recursive=recursive,
+            direct_map={
+                (
+                    "example.com",
+                    "NS",
+                    "ns1.example.net",
+                    "192.0.2.10",
+                    DnsTransport.UDP,
+                ): _result(
+                    "example.com",
+                    "NS",
+                    DnsQueryState.NOT_AUTHORITATIVE,
+                    error="DNS response was not authoritative (AA=0)",
+                    query_mode=DnsQueryMode.AUTHORITATIVE,
+                    transport=DnsTransport.UDP,
+                    server_name="ns1.example.net",
+                    server_ip="192.0.2.10",
+                    rcode="NOERROR",
+                    aa=False,
+                    tc=False,
+                ),
+                (
+                    "example.com",
+                    "NS",
+                    "ns2.example.net",
+                    "192.0.2.20",
+                    DnsTransport.UDP,
+                ): _result(
+                    "example.com",
+                    "NS",
+                    DnsQueryState.TIMEOUT,
+                    error="timeout",
+                    query_mode=DnsQueryMode.AUTHORITATIVE,
+                    transport=DnsTransport.UDP,
+                    server_name="ns2.example.net",
+                    server_ip="192.0.2.20",
+                ),
+            },
+        )
+
+        enriched = harness.collect_delegated_nameserver_evidence(evidence)
+
+        self.assertEqual(
+            enriched.delegated_servers[0].authority_queries[0].state,
+            DnsQueryState.NOT_AUTHORITATIVE,
+        )
+        self.assertEqual(
+            enriched.delegated_servers[1].authority_queries[0].state,
+            DnsQueryState.TIMEOUT,
+        )
+        self.assertFalse(
+            enriched.delegated_servers[0].has_authoritative_answer
+        )
+        self.assertFalse(
+            enriched.delegated_servers[1].has_authoritative_answer
+        )
+
+    def test_authority_probes_are_globally_bounded_and_breadth_first(self):
+        nameservers = tuple(
+            f"ns{i}.example.net" for i in range(1, 6)
+        )
+        evidence = ParentDelegationEvidence(
+            zone="example.com",
+            parent_zone="com",
+            delegated_nameservers=nameservers,
+            source_server_name="a.gtld-servers.net",
+            source_server_ip="192.0.2.53",
+        )
+        recursive = {}
+        for index, name in enumerate(nameservers, start=1):
+            recursive[(name, "A")] = _result(
+                name,
+                "A",
+                DnsQueryState.ANSWER,
+                tuple(
+                    f"192.0.{index}.{host}"
+                    for host in range(1, 5)
+                ),
+            )
+            recursive[(name, "AAAA")] = _result(
+                name,
+                "AAAA",
+                DnsQueryState.NO_ANSWER,
+            )
+
+        harness = _Harness("example.com", recursive=recursive)
+        enriched = harness.collect_delegated_nameserver_evidence(evidence)
+
+        total = sum(
+            len(server.authority_queries)
+            for server in enriched.delegated_servers
+        )
+        self.assertEqual(total, MAX_DELEGATED_AUTHORITY_PROBES)
+        self.assertEqual(len(harness.direct_calls), MAX_DELEGATED_AUTHORITY_PROBES)
+
+        # Breadth-first allocation means every NS receives three probes before
+        # the 16th global probe is allocated to the first NS.
+        self.assertEqual(
+            [len(server.probe_addresses) for server in enriched.delegated_servers],
+            [4, 3, 3, 3, 3],
+        )
+        self.assertTrue(
+            all(server.unprobed_addresses for server in enriched.delegated_servers[1:])
+        )
+
+
 class _ExistingDomainDnsStep:
     def collect_domain_dns(self):
         self.events.append("domain_dns")
@@ -319,16 +616,27 @@ class _ChainedDelegationHarness(DelegationScanMixin, _ExistingDomainDnsStep):
 
     def collect_parent_delegation(self):
         self.events.append("parent_delegation")
+        return ParentDelegationEvidence(
+            zone="example.com",
+            parent_zone="com",
+        )
+
+    def collect_delegated_nameserver_evidence(self, evidence):
+        self.events.append("delegated_nameservers")
+        return evidence
 
 
 class DelegationCompositionTest(unittest.TestCase):
-    def test_domain_dns_step_collects_parent_evidence_first(self):
+    def test_domain_dns_step_collects_delegation_evidence_first(self):
         harness = _ChainedDelegationHarness()
 
         result = harness.collect_domain_dns()
 
         self.assertEqual(result, "existing-domain-result")
-        self.assertEqual(harness.events, ["parent_delegation", "domain_dns"])
+        self.assertEqual(
+            harness.events,
+            ["parent_delegation", "delegated_nameservers", "domain_dns"],
+        )
 
 
 if __name__ == "__main__":
