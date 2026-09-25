@@ -98,10 +98,18 @@ security-report-example.com.pdf
 security-report-example.com.json
 ```
 
+To generate only the structured JSON report and skip PDF generation:
+
+```bash
+python domain_security_scan.py example.com --authorized --json-only
+```
+
+`--json-only` changes only the output artifacts. It does not change scan scope, findings, evidence collection, or scoring.
+
 ## Usage
 
 ```text
-python domain_security_scan.py DOMAIN --authorized [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX]
+python domain_security_scan.py DOMAIN --authorized [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX] [--json-only]
 ```
 
 Examples:
@@ -118,6 +126,9 @@ python domain_security_scan.py example.com --authorized --skip discovery,cms
 
 # --skip wins when the same group appears in both lists
 python domain_security_scan.py example.com --authorized --scan mail,web --skip mail
+
+# Generate structured JSON without creating a PDF
+python domain_security_scan.py example.com --authorized --json-only
 
 python domain_security_scan.py example.com --authorized --max-pages 15 --max-hosts 20
 python domain_security_scan.py example.com --authorized --out customer-example
