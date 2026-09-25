@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import dns.exception
+import dns.flags
+import dns.message
+import dns.rcode
+import dns.rrset
 
 from domain_security_scanner.dns_evidence import DnsEvidenceMixin
 from domain_security_scanner.domains.mail import MailScanMixin
@@ -50,6 +55,44 @@ class _DnsEvidenceHarness(DnsEvidenceMixin):
         self.dns_query_cache = {}
 
 
+def _response(
+    qname: str,
+    qtype: str,
+    *,
+    rcode: int = dns.rcode.NOERROR,
+    aa: bool = True,
+    tc: bool = False,
+    answer=(),
+    authority=(),
+    additional=(),
+    use_edns: bool = True,
+):
+    query = dns.message.make_query(qname, qtype, use_edns=0)
+    response = dns.message.make_response(query)
+
+    if aa:
+        response.flags |= dns.flags.AA
+    else:
+        response.flags &= ~dns.flags.AA
+
+    if tc:
+        response.flags |= dns.flags.TC
+
+    response.set_rcode(rcode)
+
+    for rrset in answer:
+        response.answer.append(rrset)
+    for rrset in authority:
+        response.authority.append(rrset)
+    for rrset in additional:
+        response.additional.append(rrset)
+
+    if not use_edns:
+        response.use_edns(edns=-1)
+
+    return response
+
+
 class SharedDnsEvidenceTest(unittest.TestCase):
     def test_scanner_resolves_dns_helpers_from_shared_layer(self):
         self.assertIs(Scanner.dns_query_result, DnsEvidenceMixin.dns_query_result)
@@ -80,6 +123,9 @@ class SharedDnsEvidenceTest(unittest.TestCase):
         self.assertIsNone(result.transport)
         self.assertIsNone(result.server_name)
         self.assertIsNone(result.server_ip)
+        self.assertIsNone(result.rcode)
+        self.assertIsNone(result.aa)
+        self.assertIsNone(result.tc)
 
     def test_recursive_cache_key_is_normalized_and_context_complete(self):
         harness = _DnsEvidenceHarness()
@@ -205,6 +251,281 @@ class SharedDnsEvidenceTest(unittest.TestCase):
             DnsEvidenceMixin._dns_unavailable_message(result),
             "transport error",
         )
+
+
+class AuthoritativeDnsQueryTest(unittest.TestCase):
+    def test_udp_query_captures_server_flags_sections_and_cache(self):
+        harness = _DnsEvidenceHarness()
+        answer = dns.rrset.from_text(
+            "example.com.",
+            300,
+            "IN",
+            "SOA",
+            "ns1.example.net. hostmaster.example.com. 1 3600 600 86400 300",
+        )
+        authority = dns.rrset.from_text(
+            "example.com.",
+            300,
+            "IN",
+            "NS",
+            "ns1.example.net.",
+            "ns2.example.net.",
+        )
+        additional = dns.rrset.from_text(
+            "ns1.example.net.",
+            300,
+            "IN",
+            "A",
+            "192.0.2.53",
+        )
+        response = _response(
+            "example.com",
+            "SOA",
+            answer=(answer,),
+            authority=(authority,),
+            additional=(additional,),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            return_value=response,
+        ) as udp:
+            first = harness.authoritative_dns_query_result(
+                "Example.COM.",
+                "soa",
+                server_name="NS1.Example.NET.",
+                server_ip="192.0.2.53",
+                transport="udp",
+            )
+            second = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_name="ns1.example.net",
+                server_ip="192.0.2.53",
+                transport=DnsTransport.UDP,
+            )
+
+        self.assertIs(first, second)
+        self.assertEqual(udp.call_count, 1)
+        self.assertEqual(first.state, DnsQueryState.ANSWER)
+        self.assertEqual(first.query_mode, DnsQueryMode.AUTHORITATIVE)
+        self.assertEqual(first.transport, DnsTransport.UDP)
+        self.assertEqual(first.server_name, "ns1.example.net")
+        self.assertEqual(first.server_ip, "192.0.2.53")
+        self.assertEqual(first.rcode, "NOERROR")
+        self.assertTrue(first.aa)
+        self.assertFalse(first.tc)
+        self.assertTrue(first.authoritative)
+        self.assertFalse(first.truncated)
+        self.assertEqual(first.edns_version, 0)
+        self.assertGreater(first.edns_payload, 0)
+        self.assertEqual(len(first.answer_section), 1)
+        self.assertEqual(len(first.authority_section), 1)
+        self.assertEqual(len(first.additional_section), 1)
+        self.assertEqual(first.answer_records, first.records)
+        self.assertIsNotNone(first.elapsed_ms)
+        self.assertGreaterEqual(first.elapsed_ms, 0)
+
+        sent_query = udp.call_args.args[0]
+        self.assertFalse(bool(sent_query.flags & dns.flags.RD))
+
+    def test_udp_truncation_is_captured_without_automatic_tcp_retry(self):
+        harness = _DnsEvidenceHarness()
+        response = _response(
+            "example.com",
+            "DNSKEY",
+            tc=True,
+            answer=(),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            return_value=response,
+        ) as udp, patch(
+            "domain_security_scanner.dns_evidence.dns.query.tcp",
+        ) as tcp:
+            result = harness.authoritative_dns_query_result(
+                "example.com",
+                "DNSKEY",
+                server_ip="192.0.2.53",
+                transport=DnsTransport.UDP,
+            )
+
+        self.assertEqual(udp.call_count, 1)
+        tcp.assert_not_called()
+        self.assertTrue(result.tc)
+        self.assertEqual(result.state, DnsQueryState.NO_ANSWER)
+
+    def test_explicit_tcp_query_uses_tcp_transport(self):
+        harness = _DnsEvidenceHarness()
+        answer = dns.rrset.from_text(
+            "example.com.",
+            300,
+            "IN",
+            "NS",
+            "ns1.example.net.",
+        )
+        response = _response(
+            "example.com",
+            "NS",
+            answer=(answer,),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.tcp",
+            return_value=response,
+        ) as tcp, patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+        ) as udp:
+            result = harness.authoritative_dns_query_result(
+                "example.com",
+                "NS",
+                server_ip="192.0.2.53",
+                transport=DnsTransport.TCP,
+            )
+
+        self.assertEqual(tcp.call_count, 1)
+        udp.assert_not_called()
+        self.assertEqual(result.transport, DnsTransport.TCP)
+        self.assertEqual(result.state, DnsQueryState.ANSWER)
+
+    def test_nxdomain_and_servfail_remain_distinct_states(self):
+        harness = _DnsEvidenceHarness()
+        nx = _response(
+            "missing.example.com",
+            "A",
+            rcode=dns.rcode.NXDOMAIN,
+            answer=(),
+        )
+        sf = _response(
+            "example.com",
+            "SOA",
+            rcode=dns.rcode.SERVFAIL,
+            answer=(),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            side_effect=[nx, sf],
+        ):
+            nx_result = harness.authoritative_dns_query_result(
+                "missing.example.com",
+                "A",
+                server_ip="192.0.2.53",
+            )
+            sf_result = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_ip="192.0.2.54",
+            )
+
+        self.assertEqual(nx_result.state, DnsQueryState.NXDOMAIN)
+        self.assertTrue(nx_result.absent)
+        self.assertEqual(nx_result.rcode, "NXDOMAIN")
+
+        self.assertEqual(sf_result.state, DnsQueryState.SERVFAIL)
+        self.assertTrue(sf_result.failed)
+        self.assertFalse(sf_result.absent)
+        self.assertEqual(sf_result.rcode, "SERVFAIL")
+
+    def test_timeout_on_one_server_does_not_poison_another_server_cache(self):
+        harness = _DnsEvidenceHarness()
+        answer = dns.rrset.from_text(
+            "example.com.",
+            300,
+            "IN",
+            "SOA",
+            "ns2.example.net. hostmaster.example.com. 1 3600 600 86400 300",
+        )
+        good_response = _response(
+            "example.com",
+            "SOA",
+            answer=(answer,),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            side_effect=[
+                dns.exception.Timeout(timeout=1),
+                good_response,
+            ],
+        ):
+            failed = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_name="ns1.example.net",
+                server_ip="192.0.2.53",
+            )
+            good = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_name="ns2.example.net",
+                server_ip="192.0.2.54",
+            )
+
+        self.assertEqual(failed.state, DnsQueryState.TIMEOUT)
+        self.assertTrue(failed.failed)
+        self.assertFalse(failed.absent)
+
+        self.assertEqual(good.state, DnsQueryState.ANSWER)
+        self.assertFalse(good.failed)
+        self.assertEqual(good.server_name, "ns2.example.net")
+
+        self.assertIs(
+            harness.authoritative_dns_cached_result(
+                "example.com",
+                "SOA",
+                server_name="ns1.example.net",
+                server_ip="192.0.2.53",
+            ),
+            failed,
+        )
+        self.assertIs(
+            harness.authoritative_dns_cached_result(
+                "example.com",
+                "SOA",
+                server_name="ns2.example.net",
+                server_ip="192.0.2.54",
+            ),
+            good,
+        )
+
+    def test_transport_failure_is_not_record_absence(self):
+        harness = _DnsEvidenceHarness()
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.tcp",
+            side_effect=ConnectionRefusedError("connection refused"),
+        ):
+            result = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_ip="192.0.2.53",
+                transport=DnsTransport.TCP,
+            )
+
+        self.assertEqual(result.state, DnsQueryState.TRANSPORT_ERROR)
+        self.assertTrue(result.failed)
+        self.assertFalse(result.absent)
+        self.assertEqual(result.error, "connection refused")
+
+    def test_stored_exception_text_is_single_line_and_bounded(self):
+        harness = _DnsEvidenceHarness()
+        noisy = OSError("network failed\n" + ("x" * 400))
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            side_effect=noisy,
+        ):
+            result = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_ip="192.0.2.53",
+            )
+
+        self.assertEqual(result.state, DnsQueryState.TRANSPORT_ERROR)
+        self.assertNotIn("\n", result.error)
+        self.assertLessEqual(len(result.error), 240)
 
 
 if __name__ == "__main__":

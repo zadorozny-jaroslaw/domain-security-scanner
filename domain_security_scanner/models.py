@@ -102,6 +102,19 @@ class DnsQueryResult:
     server_name: str | None = None
     server_ip: str | None = None
 
+    # Rich response metadata is optional so all existing recursive construction
+    # and callers remain source-compatible.
+    rcode: str | None = None
+    aa: bool | None = None
+    tc: bool | None = None
+    edns_version: int | None = None
+    edns_payload: int | None = None
+    edns_flags: int | None = None
+    answer_section: tuple[str, ...] = ()
+    authority_section: tuple[str, ...] = ()
+    additional_section: tuple[str, ...] = ()
+    elapsed_ms: float | None = None
+
     @property
     def qname(self) -> str:
         """Standards-oriented alias retained alongside the legacy host field."""
@@ -111,6 +124,21 @@ class DnsQueryResult:
     def qtype(self) -> str:
         """Standards-oriented alias retained alongside the legacy rtype field."""
         return self.rtype
+
+    @property
+    def answer_records(self) -> tuple[str, ...]:
+        """Compatibility-friendly flattened answer records."""
+        return self.records
+
+    @property
+    def authoritative(self) -> bool | None:
+        """Descriptive alias for the DNS AA flag."""
+        return self.aa
+
+    @property
+    def truncated(self) -> bool | None:
+        """Descriptive alias for the DNS TC flag."""
+        return self.tc
 
     @property
     def failed(self) -> bool:
