@@ -44,6 +44,7 @@ class Scanner(
         self._active_scan_group = None
         super().__init__(domain, max_pages=max_pages, max_hosts=max_hosts)
         self.delegation = None
+        self.delegation_analysis = None
 
         self.scan_groups = normalize_scan_groups(scan_groups)
         self.scan_selection = build_scan_selection_context(self.scan_groups)

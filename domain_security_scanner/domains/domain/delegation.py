@@ -34,6 +34,7 @@ class NameserverAddressEvidence:
     ipv6: tuple[str, ...] = ()
     a_result: DnsQueryResult | None = None
     aaaa_result: DnsQueryResult | None = None
+    cname_result: DnsQueryResult | None = None
 
     @property
     def addresses(self) -> tuple[str, ...]:
@@ -282,10 +283,11 @@ class DelegationScanMixin:
     """Collect delegation evidence without emitting delegation findings yet."""
 
     def collect_domain_dns(self):
-        """Collect delegation evidence before the existing Domain DNS step."""
+        """Collect and analyze delegation evidence before the existing Domain DNS step."""
         evidence = self.collect_parent_delegation()
         if evidence is not None:
-            self.collect_delegated_nameserver_evidence(evidence)
+            evidence = self.collect_delegated_nameserver_evidence(evidence)
+            self.analyze_delegation_evidence(evidence)
         return super().collect_domain_dns()
 
     def collect_parent_delegation(self) -> ParentDelegationEvidence:
@@ -421,6 +423,7 @@ class DelegationScanMixin:
             name = normalize_dns_name(nameserver)
             a_result = self.dns_query_result(name, "A")
             aaaa_result = self.dns_query_result(name, "AAAA")
+            cname_result = self.dns_query_result(name, "CNAME")
             ipv4 = _canonical_ip_records(a_result.records, version=4)
             ipv6 = _canonical_ip_records(aaaa_result.records, version=6)
             addresses = NameserverAddressEvidence(
@@ -429,6 +432,7 @@ class DelegationScanMixin:
                 ipv6=ipv6,
                 a_result=a_result,
                 aaaa_result=aaaa_result,
+                cname_result=cname_result,
             )
             glue = glue_by_name.get(name)
             candidates = _canonical_address_union(
@@ -476,6 +480,18 @@ class DelegationScanMixin:
         )
         self.delegation = enriched
         return enriched
+
+
+    def analyze_delegation_evidence(
+        self,
+        evidence: ParentDelegationEvidence,
+    ):
+        """Run pure delegation analysis over already-collected DNS evidence."""
+        from .delegation_analysis import analyze_delegation
+
+        analysis = analyze_delegation(evidence)
+        self.delegation_analysis = analysis
+        return analysis
 
 
 __all__ = [

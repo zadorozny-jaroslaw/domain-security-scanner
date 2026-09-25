@@ -404,8 +404,10 @@ class DelegatedNameserverCollectionTest(unittest.TestCase):
             [
                 ("ns1.example.net", "A"),
                 ("ns1.example.net", "AAAA"),
+                ("ns1.example.net", "CNAME"),
                 ("ns2.example.net", "A"),
                 ("ns2.example.net", "AAAA"),
+                ("ns2.example.net", "CNAME"),
             ],
         )
         self.assertIs(harness.delegation, enriched)
@@ -625,6 +627,10 @@ class _ChainedDelegationHarness(DelegationScanMixin, _ExistingDomainDnsStep):
         self.events.append("delegated_nameservers")
         return evidence
 
+    def analyze_delegation_evidence(self, evidence):
+        self.events.append("delegation_analysis")
+        return None
+
 
 class DelegationCompositionTest(unittest.TestCase):
     def test_domain_dns_step_collects_delegation_evidence_first(self):
@@ -635,7 +641,12 @@ class DelegationCompositionTest(unittest.TestCase):
         self.assertEqual(result, "existing-domain-result")
         self.assertEqual(
             harness.events,
-            ["parent_delegation", "delegated_nameservers", "domain_dns"],
+            [
+                "parent_delegation",
+                "delegated_nameservers",
+                "delegation_analysis",
+                "domain_dns",
+            ],
         )
 
 
