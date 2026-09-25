@@ -4,6 +4,14 @@ Use semantic version tags such as `v1.0.0`, `v1.0.1`, and `v1.1.0`.
 
 Releases are prepared on `develop`, promoted to `main` through a release pull request, and tagged only after the release PR is merged.
 
+## Release planning review
+
+- [ ] Review the active release section in `docs/ROADMAP.md`.
+- [ ] Review the detailed release plan when one exists (for v1.3.0, `docs/V1_3_DNS_PLAN.md`).
+- [ ] Confirm intended release issues are closed or explicitly deferred to a later release.
+- [ ] Confirm no completed issue introduced behavior outside the documented low-impact scope.
+- [ ] Confirm any material deviation from the original release plan is reflected in documentation and changelog wording.
+
 ## Prepare the release on `develop`
 
 - [ ] Decide whether the change is patch, minor, or major.
@@ -20,6 +28,9 @@ Releases are prepared on `develop`, promoted to `main` through a release pull re
 - [ ] Confirm partial-scope JSON/PDF output shows the effective scanned/skipped groups and does not render skipped groups as findings or score contributions.
 - [ ] If Web standards checks changed, run an authorized `--scan web` smoke test and review `http.cache`, `http.links`, `http.alt_svc`, and `http.http1_framing` evidence where applicable.
 - [ ] Confirm passive Web metadata checks do not introduce unexpected outbound requests: Link targets are not dereferenced, Alt-Svc alternatives are not contacted, and RFC 9112 does not add a raw HTTP probe.
+- [ ] If DNS/domain checks changed, run an authorized `--scan domain` smoke test and verify unavailable DNS evidence remains distinct from confirmed absence.
+- [ ] If authoritative DNS checks changed, confirm direct queries remain bounded and low-impact and do not perform AXFR, amplification measurement, malformed-packet testing, or high-volume probing by default.
+- [ ] If DNSSEC validation changed, test secure, unsigned, broken, and unavailable-evidence cases using controlled fixtures/mocks plus authorized public smoke tests where appropriate.
 - [ ] If the report layout changed, regenerate `docs/example-report.pdf` and its preview.
 - [ ] Review generated reports for secrets or data that should not be committed.
 - [ ] Confirm README usage remains accurate.
@@ -86,3 +97,4 @@ git push --force-with-lease origin develop
 - [ ] Download the source archive once and verify the expected files are present.
 - [ ] Check `Insights -> Community Standards` for accidental regressions in community-health files.
 - [ ] Confirm `main` and `develop` are aligned before creating the next feature branch.
+- [ ] Move the roadmap's current-release pointer to the next intended release.
