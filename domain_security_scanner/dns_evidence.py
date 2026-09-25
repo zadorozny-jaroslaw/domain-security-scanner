@@ -8,6 +8,7 @@ import dns.flags
 import dns.message
 import dns.query
 import dns.rcode
+import dns.rdatatype
 import dns.resolver
 
 from .models import (
@@ -209,7 +210,16 @@ class DnsEvidenceMixin:
         )
 
     @staticmethod
-    def _authoritative_state(response) -> DnsQueryState:
+    def _section_has_rtype(section, rtype: str) -> bool:
+        """Return True when a DNS message section contains the requested RR type."""
+        target = rtype.upper()
+        return any(
+            rrset.rdtype == dns.rdatatype.from_text(target)
+            for rrset in section
+        )
+
+    @classmethod
+    def _authoritative_state(cls, response) -> DnsQueryState:
         """Map a direct DNS response into the scanner evidence state model."""
         if response.flags & dns.flags.TC:
             # A truncated response is incomplete evidence. In particular, an
@@ -230,13 +240,21 @@ class DnsEvidenceMixin:
             return DnsQueryState.NOT_AUTHORITATIVE
 
         if rcode == dns.rcode.NOERROR:
-            return (
-                DnsQueryState.ANSWER
-                if response.answer
-                else DnsQueryState.NO_ANSWER
-            )
+            if response.answer:
+                return DnsQueryState.ANSWER
+
+            # RFC 2308 requires authoritative negative answers to include the
+            # zone SOA in the authority section. Without it, the response is not
+            # strong enough evidence to classify the RRset as absent.
+            if cls._section_has_rtype(response.authority, "SOA"):
+                return DnsQueryState.NO_ANSWER
+            return DnsQueryState.ERROR
+
         if rcode == dns.rcode.NXDOMAIN:
-            return DnsQueryState.NXDOMAIN
+            if cls._section_has_rtype(response.authority, "SOA"):
+                return DnsQueryState.NXDOMAIN
+            return DnsQueryState.ERROR
+
         return DnsQueryState.ERROR
 
     def authoritative_dns_query_result(
@@ -303,7 +321,18 @@ class DnsEvidenceMixin:
             elif state == DnsQueryState.NOT_AUTHORITATIVE:
                 error = "DNS response was not authoritative (AA=0)"
             elif state == DnsQueryState.ERROR:
-                error = f"DNS RCODE {dns.rcode.to_text(response.rcode())}"
+                rcode_text = dns.rcode.to_text(response.rcode())
+                if (
+                    response.rcode() in {dns.rcode.NOERROR, dns.rcode.NXDOMAIN}
+                    and bool(response.flags & dns.flags.AA)
+                    and not self._section_has_rtype(response.authority, "SOA")
+                ):
+                    error = (
+                        "Authoritative negative response did not include SOA "
+                        "evidence"
+                    )
+                else:
+                    error = f"DNS RCODE {rcode_text}"
 
         except dns.exception.Timeout as exc:
             state = DnsQueryState.TIMEOUT

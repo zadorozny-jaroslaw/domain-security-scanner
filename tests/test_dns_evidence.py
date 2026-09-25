@@ -276,9 +276,21 @@ class AuthoritativeDnsQueryTest(unittest.TestCase):
         sent_query = udp.call_args.args[0]
         self.assertFalse(bool(sent_query.flags & dns.flags.RD))
 
-    def test_conclusive_no_answer_remains_absence(self):
+    def test_conclusive_no_answer_requires_soa_negative_evidence(self):
         harness = _DnsEvidenceHarness()
-        response = _response("example.com", "CAA", answer=())
+        soa = dns.rrset.from_text(
+            "example.com.",
+            300,
+            "IN",
+            "SOA",
+            "ns1.example.net. hostmaster.example.com. 1 3600 600 86400 300",
+        )
+        response = _response(
+            "example.com",
+            "CAA",
+            answer=(),
+            authority=(soa,),
+        )
 
         with patch(
             "domain_security_scanner.dns_evidence.dns.query.udp",
@@ -294,6 +306,70 @@ class AuthoritativeDnsQueryTest(unittest.TestCase):
         self.assertTrue(result.absent)
         self.assertFalse(result.failed)
         self.assertFalse(result.tc)
+
+    def test_authoritative_empty_answer_without_soa_is_inconclusive(self):
+        harness = _DnsEvidenceHarness()
+        ns = dns.rrset.from_text(
+            "example.com.",
+            300,
+            "IN",
+            "NS",
+            "ns1.example.net.",
+            "ns2.example.net.",
+        )
+        response = _response(
+            "example.com",
+            "SOA",
+            aa=True,
+            answer=(),
+            authority=(ns,),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.tcp",
+            return_value=response,
+        ):
+            result = harness.authoritative_dns_query_result(
+                "example.com",
+                "SOA",
+                server_ip="192.0.2.53",
+                transport=DnsTransport.TCP,
+            )
+
+        self.assertEqual(result.state, DnsQueryState.ERROR)
+        self.assertTrue(result.aa)
+        self.assertTrue(result.failed)
+        self.assertFalse(result.absent)
+        self.assertEqual(
+            result.error,
+            "Authoritative negative response did not include SOA evidence",
+        )
+
+    def test_authoritative_nxdomain_without_soa_is_inconclusive(self):
+        harness = _DnsEvidenceHarness()
+        response = _response(
+            "missing.example.com",
+            "A",
+            rcode=dns.rcode.NXDOMAIN,
+            aa=True,
+            answer=(),
+            authority=(),
+        )
+
+        with patch(
+            "domain_security_scanner.dns_evidence.dns.query.udp",
+            return_value=response,
+        ):
+            result = harness.authoritative_dns_query_result(
+                "missing.example.com",
+                "A",
+                server_ip="192.0.2.53",
+            )
+
+        self.assertEqual(result.state, DnsQueryState.ERROR)
+        self.assertTrue(result.failed)
+        self.assertFalse(result.absent)
+        self.assertEqual(result.rcode, "NXDOMAIN")
 
     def test_non_authoritative_noerror_is_inconclusive_not_absence(self):
         harness = _DnsEvidenceHarness()
@@ -416,8 +492,19 @@ class AuthoritativeDnsQueryTest(unittest.TestCase):
 
     def test_nxdomain_and_servfail_remain_distinct_states(self):
         harness = _DnsEvidenceHarness()
+        soa = dns.rrset.from_text(
+            "example.com.",
+            300,
+            "IN",
+            "SOA",
+            "ns1.example.net. hostmaster.example.com. 1 3600 600 86400 300",
+        )
         nx = _response(
-            "missing.example.com", "A", rcode=dns.rcode.NXDOMAIN, answer=()
+            "missing.example.com",
+            "A",
+            rcode=dns.rcode.NXDOMAIN,
+            answer=(),
+            authority=(soa,),
         )
         sf = _response(
             "example.com", "SOA", rcode=dns.rcode.SERVFAIL, answer=()
