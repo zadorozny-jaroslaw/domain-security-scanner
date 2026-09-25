@@ -8,6 +8,11 @@ The registry is intentionally small. It is not a general RFC database and does n
 
 | Standard | Scanner coverage | Canonical reference |
 | --- | --- | --- |
+| RFC 1034 | DNS delegation, zone cuts, parent referrals and glue model | https://www.rfc-editor.org/info/rfc1034 |
+| RFC 1035 | DNS message/resource-record semantics used by direct delegation queries | https://www.rfc-editor.org/info/rfc1035 |
+| RFC 1912 | Operational delegation consistency and lame-delegation guidance | https://www.rfc-editor.org/info/rfc1912 |
+| RFC 2181 | NS target canonical-name requirement and DNS clarification used by alias checks | https://www.rfc-editor.org/info/rfc2181 |
+| RFC 2182 | Authoritative-server redundancy and reachability guidance | https://www.rfc-editor.org/info/rfc2182 |
 | RFC 3986 | URI/URI-reference validation used by redirects, Web Linking, and `security.txt` fields | https://www.rfc-editor.org/info/rfc3986 |
 | RFC 6797 | HSTS syntax, required `max-age`, duplicate directives, active/inactive policy | https://www.rfc-editor.org/info/rfc6797 |
 | RFC 7505 | Null MX detection and validation | https://www.rfc-editor.org/info/rfc7505 |
@@ -20,7 +25,40 @@ The registry is intentionally small. It is not a general RFC database and does n
 | RFC 9111 | HTTP cache-policy syntax, freshness metadata, ambiguity and deprecated response `Pragma` | https://www.rfc-editor.org/info/rfc9111 |
 | RFC 9112 | Passive HTTP/1.1 response-framing metadata: `Content-Length`, `Transfer-Encoding`, protocol version and framing classification | https://www.rfc-editor.org/info/rfc9112 |
 | RFC 9116 | `security.txt` location, media type, required fields and expiry | https://www.rfc-editor.org/info/rfc9116 |
+| RFC 9471 | In-domain glue requirements in DNS referral responses | https://www.rfc-editor.org/info/rfc9471 |
 | RFC 10025 | `Set-Cookie` syntax/security semantics, SameSite and secure cookie prefixes | https://www.rfc-editor.org/info/rfc10025 |
+
+## DNS delegation standards
+
+### RFC 1034 + RFC 1035 — delegation, referrals, and zone cuts
+
+RFC 1034 defines the DNS zone-cut/delegation model used by the scanner: parent-side NS records describe delegated subzones, the child zone publishes its authoritative apex NS RRset, and referral responses use the authority section for delegated NS records plus additional address information/glue where needed. RFC 1035 supplies the DNS message and resource-record format used by the direct query path.
+
+The scanner therefore obtains parent delegation evidence independently from the child's ordinary recursive apex NS result, then queries delegated servers directly. Parent/child consistency is derived only from child apex NS data observed in positive authoritative answers.
+
+### RFC 1912 — operational consistency and lame delegation
+
+RFC 1912 is informational operational guidance rather than an Internet Standard. It describes the common operational requirement that parent and child NS data agree and uses the term **lame delegation** for a server that is delegated responsibility for a zone but does not actually provide authoritative service for it.
+
+The scanner applies that guidance conservatively. A timeout, transport error, resolver failure, or otherwise incomplete sample is not enough to call a server lame. Lame status requires positive evidence that the delegated server answered without providing the required authoritative service.
+
+### RFC 2181 — NS targets must not be aliases
+
+RFC 2181 Section 10.3 states that the domain name used as the value of an NS record must not be an alias and must have address information rather than a CNAME RR.
+
+For every delegated NS target, the scanner therefore retains explicit CNAME lookup evidence. A confirmed CNAME dependency is reported for review; a failed CNAME lookup remains unknown instead of being treated as proof that no alias exists.
+
+### RFC 2182 — authoritative-server redundancy and reachability
+
+RFC 2182 discusses the availability value of multiple authoritative servers and the operational importance of reachable listed servers. It notes the baseline requirement for at least two servers for a zone while recommending additional diversity for many operational environments.
+
+The scanner keeps its existing minimum-two-nameserver posture check, but #14 now bases that check on the parent delegation instead of only RDAP metadata. It does not attempt ASN, provider, geographic, or topological diversity scoring.
+
+### RFC 9471 — glue in referral responses
+
+RFC 9471 updates RFC 1034's referral behavior for in-domain nameservers and clarifies that authoritative parent servers are expected to include available glue for in-domain delegated NS names, setting TC when all required glue cannot fit in the chosen transport.
+
+The #14 scanner records observed parent-referral glue, requires glue only for in-bailiwick nameservers, and compares it with current address evidence when that comparison is reliable. A truncated referral is not promoted into a complete delegation conclusion. #14 does not silently retry the referral over TCP; explicit UDP/TCP transport comparison is handled by the separate authoritative-transport workstream.
 
 ## Web standards
 

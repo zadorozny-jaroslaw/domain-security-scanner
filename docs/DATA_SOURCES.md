@@ -23,11 +23,22 @@ Depending on the selected groups, the scanner may query the authorized target/ro
 - `https://mta-sts.<root-domain>/.well-known/mta-sts.txt` only after a usable RFC 8461 MTA-STS TXT indicator is found; redirects are not followed and normal HTTPS certificate validation remains enabled;
 - `https://<web-target>/.well-known/security.txt` when Web checks are selected.
 
-The shared v1.3 DNS evidence layer also supports explicit direct queries to one supplied authoritative-server IP over UDP or TCP. Direct authoritative evidence is server- and transport-specific, clears the recursion-desired flag, and does not silently retry UDP evidence over TCP. The normal scan plan only issues these requests when a DNS check explicitly asks for authoritative evidence; the shared helper does not independently enumerate or probe servers.
+The shared v1.3 DNS evidence layer also supports explicit direct queries to one supplied authoritative-server IP over UDP or TCP. Direct authoritative evidence is server- and transport-specific, clears the recursion-desired flag, and does not silently retry UDP evidence over TCP.
+
+When the `domain` group is selected, the v1.3 delegation check now uses that layer to obtain parent-side delegation evidence and evaluate delegated nameservers. It can:
+
+- resolve the immediate parent zone's NS set through the configured recursive resolver;
+- resolve addresses for candidate parent authoritative servers;
+- send a bounded direct UDP NS query to a parent server to obtain the child referral;
+- retain delegated NS names and referral glue from authority/additional sections;
+- resolve A, AAAA, and CNAME evidence for each delegated NS;
+- send a bounded direct UDP apex-NS query to representative delegated-server endpoints, using at most one fallback endpoint when the first probe does not positively establish authority.
+
+These direct requests can therefore be visible not only to the authorized domain's authoritative DNS provider but also to the relevant parent-zone authoritative infrastructure. They are deliberately small and server-specific. TCP/UDP transport comparison, SOA consistency, and EDNS observations belong to the separate v1.3 authoritative-consistency workstream.
 
 Direct-authoritative support does not perform zone transfers, amplification measurement, malformed-packet testing, or high-volume DNS probing.
 
-Normal scan outputs can therefore be visible in the target's DNS, web-server, reverse-proxy, CDN, or firewall logs.
+Normal scan outputs can therefore be visible in the target's DNS, web-server, reverse-proxy, CDN, firewall, and relevant parent-zone DNS logs.
 
 Several standards-backed Web checks reuse the already-fetched HTTPS homepage response and do **not** create additional target requests: RFC 9111 cache metadata, RFC 8288 `Link`, RFC 7838 `Alt-Svc`, and the passive RFC 9112 HTTP/1.1 framing check. `Link` targets are not dereferenced, advertised `Alt-Svc` alternatives are not contacted, and the RFC 9112 check does not open a raw socket or send a separate HTTP/1.1 probe.
 
