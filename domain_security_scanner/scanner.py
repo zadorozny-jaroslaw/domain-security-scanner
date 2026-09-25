@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from .base import BaseScanner
+from .dns_evidence import DnsEvidenceMixin
 from .domains.cms import CmsScanMixin
 from .domains.discovery import DiscoveryScanMixin
 from .domains.domain import DomainScanMixin
@@ -19,7 +20,16 @@ from .orchestration import (
 from .version import __version__
 
 
-class Scanner(DomainScanMixin, MailScanMixin, DiscoveryScanMixin, TlsScanMixin, WebScanMixin, CmsScanMixin, BaseScanner):
+class Scanner(
+    DnsEvidenceMixin,
+    DomainScanMixin,
+    MailScanMixin,
+    DiscoveryScanMixin,
+    TlsScanMixin,
+    WebScanMixin,
+    CmsScanMixin,
+    BaseScanner,
+):
     """Orchestrates scan groups while preserving the existing default behavior."""
 
     def __init__(
