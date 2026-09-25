@@ -1,6 +1,18 @@
 # Development workflow
 
-Domain Security Scanner uses a lightweight two-branch release model with short-lived topic branches.
+Domain Security Scanner uses a lightweight two-branch release model with short-lived topic branches and lightweight issue tracking.
+
+## Planning model
+
+Use three levels of planning:
+
+- `docs/ROADMAP.md` records release direction, boundaries, and longer-term themes.
+- GitHub Issues describe concrete implementation units and acceptance criteria for the active release.
+- Pull requests contain the reviewed implementation and should reference the issue they advance or close.
+
+For a solo-maintained project, keep issue tracking intentionally small. Prefer a handful of meaningful issues per release over one issue per tiny code change. GitHub Projects, story points, sprint ceremonies, and elaborate label systems are optional and should only be added if they solve a real coordination problem.
+
+The roadmap is not a substitute for an implementation issue, and an issue is not a substitute for tests or documentation.
 
 ## Long-lived branches
 
@@ -26,10 +38,10 @@ Domain Security Scanner uses a lightweight two-branch release model with short-l
 Use short-lived branches with focused scope, for example:
 
 ```text
-feature/result-models
-feature/mail-rfc-standards
+feature/dns-evidence-layer
+feature/dnssec-validation
 fix/dns-timeout-handling
-docs/release-workflow
+docs/v1.3-roadmap
 ```
 
 Create a topic branch from an up-to-date `develop`:
@@ -43,6 +55,24 @@ git push -u origin feature/<topic>
 
 Keep unrelated changes out of the branch. Add tests and documentation with the behavior they describe rather than deferring them to an unrelated later PR.
 
+## Issues
+
+Create issues from the active release roadmap once the release boundary is clear.
+
+A useful implementation issue should normally contain:
+
+- the problem or capability being addressed;
+- the intended scope;
+- relevant RFCs or technical references;
+- acceptance criteria;
+- important non-goals;
+- test expectations;
+- report/JSON compatibility considerations when applicable.
+
+Keep issue size large enough to represent meaningful work. If an issue becomes too broad to review safely, split it by capability rather than by individual functions or files.
+
+When implementation starts, use a topic branch whose name reflects the issue scope. Reference the issue from the pull request and close it only when its acceptance criteria are satisfied or intentionally revised.
+
 ## Topic pull requests
 
 Open topic pull requests with:
@@ -54,11 +84,13 @@ compare: feature/<topic>   # or fix/<topic>, docs/<topic>
 
 Before merging:
 
+- confirm the linked issue acceptance criteria are satisfied or updated;
 - run the unit tests;
 - run compile checks when Python code changed;
 - review generated PDF output when report layout changed;
 - confirm uncertainty is handled conservatively for externally unavailable evidence;
-- confirm the change remains within the documented low-impact scope.
+- confirm the change remains within the documented low-impact scope;
+- update relevant roadmap/release-plan wording if the implementation materially changed the planned boundary.
 
 The repository uses **Squash and merge** for pull requests. Delete finished topic branches after their work is safely present in `develop`.
 
@@ -66,15 +98,16 @@ The repository uses **Squash and merge** for pull requests. Delete finished topi
 
 When `develop` is ready for release:
 
-1. finalize the semantic version, README version, and `CHANGELOG.md` on `develop`;
-2. run the complete release validation and an authorized smoke test;
-3. push the finalized `develop` branch;
-4. open a pull request with **base `main`** and **compare `develop`**;
-5. review CI, security/code-scanning results, and the complete release diff;
-6. squash-merge the release pull request;
-7. pull the new `main` locally and rerun the version check and unit tests;
-8. create an annotated `vX.Y.Z` tag on `main` and push the tag;
-9. publish the GitHub Release from that tag.
+1. review the active release roadmap and ensure intended issues are closed or explicitly deferred;
+2. finalize the semantic version, README version, and `CHANGELOG.md` on `develop`;
+3. run the complete release validation and an authorized smoke test;
+4. push the finalized `develop` branch;
+5. open a pull request with **base `main`** and **compare `develop`**;
+6. review CI, security/code-scanning results, and the complete release diff;
+7. squash-merge the release pull request;
+8. pull the new `main` locally and rerun the version check and unit tests;
+9. create an annotated `vX.Y.Z` tag on `main` and push the tag;
+10. publish the GitHub Release from that tag.
 
 See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the detailed release checklist.
 
