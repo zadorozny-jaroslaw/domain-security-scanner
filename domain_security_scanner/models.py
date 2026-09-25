@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
@@ -31,6 +32,7 @@ class DnsQueryState(StrEnum):
     NXDOMAIN = "nxdomain"
     TIMEOUT = "timeout"
     SERVFAIL = "servfail"
+    TRUNCATED = "truncated"
     TRANSPORT_ERROR = "transport_error"
     ERROR = "error"
 
@@ -77,7 +79,11 @@ class DnsQueryCacheKey:
             if server_name
             else None
         )
-        normalized_server_ip = str(server_ip).strip() if server_ip else None
+        normalized_server_ip = (
+            str(ipaddress.ip_address(str(server_ip).strip()))
+            if server_ip is not None
+            else None
+        )
         return cls(
             qname=str(qname).strip().lower().rstrip("."),
             qtype=str(qtype).strip().upper(),
@@ -145,6 +151,7 @@ class DnsQueryResult:
         return self.state in {
             DnsQueryState.TIMEOUT,
             DnsQueryState.SERVFAIL,
+            DnsQueryState.TRUNCATED,
             DnsQueryState.TRANSPORT_ERROR,
             DnsQueryState.ERROR,
         }
@@ -165,8 +172,6 @@ class Check:
     applicable: bool = True
 
     def __post_init__(self) -> None:
-        # Accept the existing string-based constructor/API while storing validated,
-        # typed values internally. StrEnum remains string-compatible for callers.
         self.category = CheckCategory(self.category)
         self.status = CheckStatus(self.status)
 

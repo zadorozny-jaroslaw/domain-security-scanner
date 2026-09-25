@@ -112,11 +112,7 @@ class DnsEvidenceMixin:
         )
 
     def dns_query_result(self, host: str, rtype: str) -> DnsQueryResult:
-        """Return cached recursive DNS evidence.
-
-        Absence and resolver failure remain distinct. Recursive callers retain
-        their existing method signature and behavior.
-        """
+        """Return cached recursive DNS evidence."""
         cache_key = self._recursive_dns_cache_key(host, rtype)
         host_key = cache_key.qname
         rtype_key = cache_key.qtype
@@ -215,6 +211,11 @@ class DnsEvidenceMixin:
     @staticmethod
     def _authoritative_state(response) -> DnsQueryState:
         """Map a direct DNS response into the scanner evidence state model."""
+        if response.flags & dns.flags.TC:
+            # A truncated response is incomplete evidence. In particular, an
+            # empty truncated answer must never become conclusive NO_ANSWER.
+            return DnsQueryState.TRUNCATED
+
         rcode = response.rcode()
         if rcode == dns.rcode.NOERROR:
             return (
@@ -241,9 +242,8 @@ class DnsEvidenceMixin:
         """Query one DNS server directly over an explicit transport.
 
         The result represents evidence about exactly this server address and
-        transport. A timeout, transport error, SERVFAIL, or other error is cached
-        as that server's evidence only; callers must not promote it to a zone-wide
-        conclusion without comparing the remaining authoritative servers.
+        transport. A timeout, truncated response, transport error, SERVFAIL, or
+        other error is cached as that server's evidence only.
         """
         cache_key = self._authoritative_dns_cache_key(
             host,
@@ -271,8 +271,6 @@ class DnsEvidenceMixin:
                 qtype,
                 use_edns=0,
             )
-            # Direct authoritative evidence must not ask the target server to
-            # recurse on our behalf.
             query.flags &= ~dns.flags.RD
 
             if transport_value == DnsTransport.UDP:
@@ -290,7 +288,9 @@ class DnsEvidenceMixin:
                 )
 
             state = self._authoritative_state(response)
-            if state == DnsQueryState.ERROR:
+            if state == DnsQueryState.TRUNCATED:
+                error = "DNS response was truncated; retry explicitly over TCP"
+            elif state == DnsQueryState.ERROR:
                 error = f"DNS RCODE {dns.rcode.to_text(response.rcode())}"
 
         except dns.exception.Timeout as exc:
@@ -350,6 +350,7 @@ class DnsEvidenceMixin:
         labels = {
             DnsQueryState.TIMEOUT: "timeout",
             DnsQueryState.SERVFAIL: "SERVFAIL",
+            DnsQueryState.TRUNCATED: "truncated response",
             DnsQueryState.TRANSPORT_ERROR: "transport error",
             DnsQueryState.ERROR: "resolver error",
         }
