@@ -23,6 +23,10 @@ Depending on the selected groups, the scanner may query the authorized target/ro
 - `https://mta-sts.<root-domain>/.well-known/mta-sts.txt` only after a usable RFC 8461 MTA-STS TXT indicator is found; redirects are not followed and normal HTTPS certificate validation remains enabled;
 - `https://<web-target>/.well-known/security.txt` when Web checks are selected.
 
+The shared v1.3 DNS evidence layer also supports explicit direct queries to one supplied authoritative-server IP over UDP or TCP. Direct authoritative evidence is server- and transport-specific, clears the recursion-desired flag, and does not silently retry UDP evidence over TCP. The normal scan plan only issues these requests when a DNS check explicitly asks for authoritative evidence; the shared helper does not independently enumerate or probe servers.
+
+Direct-authoritative support does not perform zone transfers, amplification measurement, malformed-packet testing, or high-volume DNS probing.
+
 Normal scan outputs can therefore be visible in the target's DNS, web-server, reverse-proxy, CDN, or firewall logs.
 
 Several standards-backed Web checks reuse the already-fetched HTTPS homepage response and do **not** create additional target requests: RFC 9111 cache metadata, RFC 8288 `Link`, RFC 7838 `Alt-Svc`, and the passive RFC 9112 HTTP/1.1 framing check. `Link` targets are not dereferenced, advertised `Alt-Svc` alternatives are not contacted, and the RFC 9112 check does not open a raw socket or send a separate HTTP/1.1 probe.

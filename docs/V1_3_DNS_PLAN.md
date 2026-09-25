@@ -62,6 +62,8 @@ This makes RFC behavior testable without live DNS and keeps network failures sep
 
 ## Workstream 1 - Shared DNS evidence layer
 
+**Status: implemented in issue #13.**
+
 ### Required
 
 - Move generic DNS query/evidence helpers out of the mail scanner.
@@ -81,6 +83,22 @@ This makes RFC behavior testable without live DNS and keeps network failures sep
 - Recursive and authoritative evidence cannot collide in cache.
 - Tests cover answer, no-answer, NXDOMAIN, timeout, SERVFAIL, and transport failure.
 - No existing check starts treating unavailable DNS evidence as a confirmed absence.
+
+### Implemented foundation
+
+- `DnsEvidenceMixin` owns the shared recursive and direct-authoritative query paths.
+- Existing `dns_query_result(host, rtype)` and `dns_query(host, rtype)` callers remain compatible.
+- Direct authoritative queries target one literal server IP over explicit UDP or TCP with RD cleared.
+- Cache identity includes qname, qtype, query mode, transport, server name, and canonical server IP.
+- Evidence preserves RCODE, AA/TC, EDNS metadata, answer/authority/additional sections, elapsed time, and sanitized direct-query errors.
+- Failure states distinguish timeout, SERVFAIL, non-authoritative response, truncation, transport failure, and other protocol/evidence errors.
+- Only conclusive `NO_ANSWER` and `NXDOMAIN` states count as absence.
+- Direct authoritative `NOERROR`/empty-answer and `NXDOMAIN` evidence requires AA plus SOA authority evidence; otherwise it remains unavailable/inconclusive.
+- A failure from one authoritative server remains evidence about that server and transport only.
+- The layer does not automatically retry UDP over TCP, allowing later transport checks to compare them independently.
+- The shared layer adds no high-volume discovery, zone transfer, fuzzing, or amplification behavior.
+
+See [DNS_EVIDENCE.md](DNS_EVIDENCE.md) for the implemented evidence model and failure semantics.
 
 ## Workstream 2 - Delegation and authoritative nameservers
 
