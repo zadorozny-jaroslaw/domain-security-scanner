@@ -6,7 +6,13 @@ import dns.resolver
 import requests
 
 from .constants import USER_AGENT
-from .models import Check, CheckCategory, CheckStatus, DnsQueryResult
+from .models import (
+    Check,
+    CheckCategory,
+    CheckStatus,
+    DnsQueryCacheKey,
+    DnsQueryResult,
+)
 from .utils import fallback_root_domain, normalize_domain
 
 
@@ -35,7 +41,7 @@ class BaseScanner:
         self.emails: set[str] = set()
         self.crawl_mixed_content: set[str] = set()
         self.dns_records: dict[str, dict[str, list[str]]] = {}
-        self.dns_query_cache: dict[tuple[str, str], DnsQueryResult] = {}
+        self.dns_query_cache: dict[DnsQueryCacheKey, DnsQueryResult] = {}
         self.rdap: dict[str, Any] = {}
         self.http: dict[str, Any] = {}
         self.tls: dict[str, Any] = {}

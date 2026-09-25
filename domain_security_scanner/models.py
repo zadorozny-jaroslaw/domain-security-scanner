@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
@@ -24,14 +25,74 @@ class CheckCategory(StrEnum):
 
 
 class DnsQueryState(StrEnum):
-    """Outcome of one DNS lookup, separating absence from resolver failure."""
+    """Outcome of one DNS lookup, separating absence from query failure."""
 
     ANSWER = "answer"
     NO_ANSWER = "no_answer"
     NXDOMAIN = "nxdomain"
     TIMEOUT = "timeout"
     SERVFAIL = "servfail"
+    NOT_AUTHORITATIVE = "not_authoritative"
+    TRUNCATED = "truncated"
+    TRANSPORT_ERROR = "transport_error"
     ERROR = "error"
+
+
+class DnsQueryMode(StrEnum):
+    """How DNS evidence was obtained."""
+
+    RECURSIVE = "recursive"
+    AUTHORITATIVE = "authoritative"
+
+
+class DnsTransport(StrEnum):
+    """Explicit DNS transport for direct queries."""
+
+    UDP = "udp"
+    TCP = "tcp"
+
+
+@dataclass(frozen=True)
+class DnsQueryCacheKey:
+    """Context-complete cache identity for recursive and direct DNS queries."""
+
+    qname: str
+    qtype: str
+    mode: DnsQueryMode
+    transport: DnsTransport | None = None
+    server_name: str | None = None
+    server_ip: str | None = None
+
+    @classmethod
+    def build(
+        cls,
+        qname: str,
+        qtype: str,
+        *,
+        mode: DnsQueryMode | str,
+        transport: DnsTransport | str | None = None,
+        server_name: str | None = None,
+        server_ip: str | None = None,
+    ) -> "DnsQueryCacheKey":
+        """Normalize DNS query context into a stable cache key."""
+        normalized_server_name = (
+            str(server_name).strip().lower().rstrip(".")
+            if server_name
+            else None
+        )
+        normalized_server_ip = (
+            str(ipaddress.ip_address(str(server_ip).strip()))
+            if server_ip is not None
+            else None
+        )
+        return cls(
+            qname=str(qname).strip().lower().rstrip("."),
+            qtype=str(qtype).strip().upper(),
+            mode=DnsQueryMode(mode),
+            transport=DnsTransport(transport) if transport is not None else None,
+            server_name=normalized_server_name,
+            server_ip=normalized_server_ip,
+        )
 
 
 @dataclass(frozen=True)
@@ -43,19 +104,63 @@ class DnsQueryResult:
     state: DnsQueryState
     records: tuple[str, ...] = ()
     error: str | None = None
+    query_mode: DnsQueryMode = DnsQueryMode.RECURSIVE
+    transport: DnsTransport | None = None
+    server_name: str | None = None
+    server_ip: str | None = None
+
+    # Rich response metadata is optional so all existing recursive construction
+    # and callers remain source-compatible.
+    rcode: str | None = None
+    aa: bool | None = None
+    tc: bool | None = None
+    edns_version: int | None = None
+    edns_payload: int | None = None
+    edns_flags: int | None = None
+    answer_section: tuple[str, ...] = ()
+    authority_section: tuple[str, ...] = ()
+    additional_section: tuple[str, ...] = ()
+    elapsed_ms: float | None = None
+
+    @property
+    def qname(self) -> str:
+        """Standards-oriented alias retained alongside the legacy host field."""
+        return self.host
+
+    @property
+    def qtype(self) -> str:
+        """Standards-oriented alias retained alongside the legacy rtype field."""
+        return self.rtype
+
+    @property
+    def answer_records(self) -> tuple[str, ...]:
+        """Compatibility-friendly flattened answer records."""
+        return self.records
+
+    @property
+    def authoritative(self) -> bool | None:
+        """Descriptive alias for the DNS AA flag."""
+        return self.aa
+
+    @property
+    def truncated(self) -> bool | None:
+        """Descriptive alias for the DNS TC flag."""
+        return self.tc
 
     @property
     def failed(self) -> bool:
         return self.state in {
             DnsQueryState.TIMEOUT,
             DnsQueryState.SERVFAIL,
+            DnsQueryState.NOT_AUTHORITATIVE,
+            DnsQueryState.TRUNCATED,
+            DnsQueryState.TRANSPORT_ERROR,
             DnsQueryState.ERROR,
         }
 
     @property
     def absent(self) -> bool:
         return self.state in {DnsQueryState.NO_ANSWER, DnsQueryState.NXDOMAIN}
-
 
 
 @dataclass
@@ -69,8 +174,6 @@ class Check:
     applicable: bool = True
 
     def __post_init__(self) -> None:
-        # Accept the existing string-based constructor/API while storing validated,
-        # typed values internally. StrEnum remains string-compatible for callers.
         self.category = CheckCategory(self.category)
         self.status = CheckStatus(self.status)
 

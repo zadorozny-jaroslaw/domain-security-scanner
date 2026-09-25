@@ -9,6 +9,18 @@ The project follows [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Add `--json-only` to skip PDF generation while preserving the normal structured JSON report.
+- Add a shared DNS evidence layer used by Domain, Discovery, and Mail recursive lookups.
+- Add direct single-server authoritative DNS queries over explicit UDP or TCP.
+- Capture authoritative DNS RCODE, AA/TC flags, EDNS metadata, answer/authority/additional sections, elapsed time, and server context.
+- Add query-context cache identities that separate recursive vs authoritative evidence, authoritative server endpoints, and UDP vs TCP.
+- Add explicit non-authoritative, truncated, transport-failure, and other unavailable-evidence states so they cannot be mistaken for record absence.
+
+### Changed
+
+- Move generic DNS lookup ownership out of the Mail scan group into shared DNS infrastructure.
+- Require authoritative negative DNS evidence to set AA and include SOA evidence before `NO_ANSWER` or `NXDOMAIN` is treated as conclusive absence.
+- Keep direct authoritative failures scoped to the queried server/transport instead of promoting one server failure into a zone-wide conclusion.
+- Preserve the existing recursive `dns_query_result()` / `dns_query()` interfaces and current public JSON fields while the richer v1.3 DNS model is integrated incrementally.
 
 ## [1.2.0] - 2026-09-24
 

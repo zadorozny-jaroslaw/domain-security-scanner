@@ -130,7 +130,7 @@ class DiscoveryScanMixin:
                 continue
 
             results = [
-                self.dns_query_cache.get((host.lower().rstrip("."), rtype))
+                self.dns_cached_result(host, rtype)
                 for rtype in COMMON_DNS_TYPES
             ]
             results = [result for result in results if result is not None]

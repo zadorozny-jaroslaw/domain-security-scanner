@@ -320,6 +320,7 @@ domain_security_scanner/
 ├── models.py                         # typed check/status/category/score result models
 ├── utils.py                          # domain/date helper functions
 ├── base.py                           # shared Scanner state
+├── dns_evidence.py                   # shared recursive/direct-authoritative DNS evidence and query cache
 ├── orchestration.py                  # scan-group order, selection, prerequisites, execution plan
 ├── scanner.py                        # Scanner composition, execution, scoring, serialization
 ├── cli.py                            # argument parsing and output handling
