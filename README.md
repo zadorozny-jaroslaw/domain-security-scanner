@@ -106,10 +106,19 @@ python domain_security_scan.py example.com --authorized --json-only
 
 `--json-only` changes only the output artifacts. It does not change scan scope, findings, evidence collection, or scoring.
 
+Compare two existing JSON reports without performing a scan:
+
+```bash
+python domain_security_scan.py --diff previous.json current.json
+```
+
+Diff mode ignores known volatile metadata such as `generated_at`, normalizes known set-like scanner collections, and reports meaningful added, removed, and changed values. It does not require `--authorized` because it performs no network activity. Exit code `0` means the reports are semantically equivalent, `1` means meaningful differences were found, and `2` means the comparison input or arguments were invalid.
+
 ## Usage
 
 ```text
 python domain_security_scan.py DOMAIN --authorized [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX] [--json-only]
+python domain_security_scan.py --diff OLD_JSON NEW_JSON
 ```
 
 Examples:
@@ -130,11 +139,14 @@ python domain_security_scan.py example.com --authorized --scan mail,web --skip m
 # Generate structured JSON without creating a PDF
 python domain_security_scan.py example.com --authorized --json-only
 
+# Compare two existing JSON reports; no scan or authorization flag is needed
+python domain_security_scan.py --diff previous.json current.json
+
 python domain_security_scan.py example.com --authorized --max-pages 15 --max-hosts 20
 python domain_security_scan.py example.com --authorized --out customer-example
 ```
 
-The `--authorized` flag is deliberately mandatory.
+The `--authorized` flag is deliberately mandatory for scan mode. Diff mode reads only local JSON reports and does not require authorization.
 
 ## Scan groups
 

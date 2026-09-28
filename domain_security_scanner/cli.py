@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .orchestration import SCAN_GROUPS, resolve_scan_groups
+from .reporting.diff import ReportDiffError, compare_report_files, format_diff
 from .reporting.pdf import generate_pdf
 from .scanner import Scanner
 from .version import __version__
@@ -19,9 +20,7 @@ def _parse_group_list(value: str) -> tuple[str, ...]:
             groups.append(group)
 
     if not groups:
-        raise argparse.ArgumentTypeError(
-            "scan group list cannot be empty"
-        )
+        raise argparse.ArgumentTypeError("scan group list cannot be empty")
 
     unknown = [group for group in groups if group not in SCAN_GROUPS]
     if unknown:
@@ -42,6 +41,17 @@ def _resolve_scan_groups(
     return resolve_scan_groups(scan_groups, skip_groups)
 
 
+def _run_diff(old_path: str, new_path: str) -> int:
+    try:
+        result = compare_report_files(old_path, new_path)
+    except ReportDiffError as exc:
+        print(f"Diff error: {exc}", file=sys.stderr)
+        return 2
+
+    print(format_diff(result))
+    return 1 if result.has_changes else 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Low-impact external domain security hygiene scanner."
@@ -51,11 +61,17 @@ def main():
         action="version",
         version=f"Domain Security Scanner {__version__}",
     )
-    parser.add_argument("domain", help="Domena, np. example.pl")
+    parser.add_argument("domain", nargs="?", help="Domena, np. example.pl")
+    parser.add_argument(
+        "--diff",
+        nargs=2,
+        metavar=("OLD_JSON", "NEW_JSON"),
+        help="Porównaj semantycznie dwa istniejące raporty JSON bez wykonywania skanu.",
+    )
     parser.add_argument(
         "--authorized",
         action="store_true",
-        help="Potwierdzam, że mam zgodę na ocenę tej domeny."
+        help="Potwierdzam, że mam zgodę na ocenę tej domeny.",
     )
     parser.add_argument("--max-pages", type=int, default=20, choices=range(1, 101))
     parser.add_argument("--max-hosts", type=int, default=25, choices=range(1, 101))
@@ -85,6 +101,24 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.diff:
+        scan_only_options = (
+            args.domain is not None
+            or args.authorized
+            or args.scan is not None
+            or args.skip is not None
+            or args.out is not None
+            or args.json_only
+            or args.max_pages != 20
+            or args.max_hosts != 25
+        )
+        if scan_only_options:
+            parser.error("--diff cannot be combined with scan mode or scan-only options")
+        return _run_diff(*args.diff)
+
+    if args.domain is None:
+        parser.error("domain is required unless --diff is used")
+
     if not args.authorized:
         print(
             "Refusing to scan without --authorized. "
@@ -93,10 +127,7 @@ def main():
         )
         return 2
 
-    selected_groups, selection_warnings = _resolve_scan_groups(
-        args.scan,
-        args.skip,
-    )
+    selected_groups, selection_warnings = _resolve_scan_groups(args.scan, args.skip)
     for warning in selection_warnings:
         print(f"[!] Warning: {warning}", file=sys.stderr)
 
@@ -117,10 +148,7 @@ def main():
         warnings_list=selection_warnings,
     )
 
-    skipped_effective = [
-        group for group in SCAN_GROUPS
-        if group not in scanner.scan_groups
-    ]
+    skipped_effective = [group for group in SCAN_GROUPS if group not in scanner.scan_groups]
 
     print(f"[+] Web target: {scanner.target_domain}")
     print(f"[+] Scan groups: {', '.join(scanner.scan_groups) if scanner.scan_groups else '(none)'}")
@@ -131,7 +159,6 @@ def main():
 
     prefix = args.out or f"security-report-{scanner.target_domain}"
     json_path = Path(prefix + ".json")
-
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     pdf_path = None
