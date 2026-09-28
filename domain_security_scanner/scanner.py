@@ -130,6 +130,7 @@ class Scanner(
             "score": self.score(),
             "checks": [c.to_dict() for c in self.checks],
             "rdap": self.rdap,
+            "caa": getattr(self, "caa", {}),
             "mail": self.mail,
             "tls": self.tls,
             "http": self.http,

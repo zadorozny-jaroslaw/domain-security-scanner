@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Optional
 
 from ...constants import COMMON_DNS_TYPES, TIMEOUT
-from ...models import DnsQueryResult
 from ...utils import days_until, fallback_root_domain
+from .caa import collect_caa_policy
 from .delegation_findings import build_delegation_findings
 
 
@@ -189,6 +189,103 @@ class DomainScanMixin:
                 finding.applicable,
             )
 
+    def _add_caa_findings(self):
+        """Emit CAA posture from the RFC 8659 effective-policy evidence."""
+        evidence = getattr(self, "caa", {}) or {}
+        analysis = evidence.get("analysis", {})
+        state = analysis.get("state")
+
+        if state == "unknown":
+            failure = evidence.get("lookup_failure") or {}
+            failed_name = failure.get("name", "nieznanej nazwie")
+            failed_state = failure.get("state", "resolver_error")
+            self.add_check(
+                "Domain", "CAA", "unknown",
+                f"Nie można wiarygodnie ustalić efektywnej polityki CAA: "
+                f"zapytanie dla {failed_name} zakończyło się stanem {failed_state}.",
+                3, 0, False
+            )
+            return
+
+        if state == "absent":
+            self.add_check(
+                "Domain", "CAA", "warn",
+                f"Nie wykryto rekordu CAA w łańcuchu RFC 8659 od "
+                f"{self.target_domain} do korzenia DNS.",
+                3, 0
+            )
+            return
+
+        effective_name = evidence.get("effective_name")
+        records = evidence.get("records", [])
+        syntax_errors = analysis.get("syntax_error_records", [])
+        if syntax_errors:
+            self.add_check(
+                "Domain", "CAA", "unknown",
+                f"Wykryto efektywny RRset CAA dla {effective_name}, ale nie wszystkie "
+                f"rekordy udało się bezpiecznie sparsować.",
+                3, 0, False
+            )
+            return
+
+        if analysis.get("fqdn_issuance_restricted"):
+            issuers = analysis.get("fqdn_issuers", [])
+            if analysis.get("fqdn_issuance_forbidden"):
+                policy_text = "polityka zabrania wystawiania certyfikatów dla zwykłego FQDN"
+            elif issuers:
+                policy_text = "issuer-domain-name: " + ", ".join(issuers)
+            else:
+                policy_text = "polityka ogranicza wystawianie certyfikatów dla zwykłego FQDN"
+            self.add_check(
+                "Domain", "CAA", "pass",
+                f"Wykryto {len(records)} rekord(y) CAA; efektywna polityka pochodzi z "
+                f"{effective_name} ({policy_text}).",
+                3, 3
+            )
+        elif analysis.get("has_issuewild"):
+            self.add_check(
+                "Domain", "CAA", "warn",
+                f"Efektywny RRset CAA dla {effective_name} zawiera issuewild, ale nie "
+                "zawiera issue; dla zwykłego FQDN nie ogranicza wystawiania certyfikatów.",
+                3, 0
+            )
+        elif analysis.get("critical_unknown_tags"):
+            self.add_check(
+                "Domain", "CAA", "unknown",
+                f"Efektywny RRset CAA dla {effective_name} nie zawiera rozpoznanego issue, "
+                "a zawiera krytyczne nierozpoznane właściwości; skutku polityki nie można "
+                "jednoznacznie ocenić.",
+                3, 0, False
+            )
+        else:
+            self.add_check(
+                "Domain", "CAA", "warn",
+                f"Efektywny RRset CAA dla {effective_name} nie zawiera właściwości issue; "
+                "sama obecność iodef lub nierozpoznanych niekrytycznych tagów nie ogranicza "
+                "wystawiania certyfikatów dla zwykłego FQDN.",
+                3, 0
+            )
+
+        malformed_values = analysis.get("malformed_value_records", [])
+        if malformed_values:
+            self.add_check(
+                "Domain", "CAA policy syntax", "warn",
+                f"W efektywnym RRset CAA wykryto {len(malformed_values)} nieprawidłowe "
+                "wartości rozpoznanych właściwości. Nieprawidłowe issue/issuewild są "
+                "traktowane przez RFC 8659 jak pusty issuer-domain-name.",
+                0, 0
+            )
+
+        critical_unknown = analysis.get("critical_unknown_tags", [])
+        if critical_unknown:
+            self.add_check(
+                "Domain", "CAA critical properties", "warn",
+                "Efektywny RRset CAA zawiera krytyczne nierozpoznane tagi: "
+                + ", ".join(critical_unknown)
+                + ". CA, która nie obsługuje takiego tagu, nie może wystawić certyfikatu.",
+                0, 0
+            )
+
     def collect_domain_dns(self):
         """Collect root/target DNS inventory and evaluate domain-level DNS posture."""
         # Delegation evidence is collected by DelegationScanMixin before this
@@ -196,25 +293,30 @@ class DomainScanMixin:
         # nameserver redundancy check is replaced rather than duplicated.
         self._add_delegation_findings()
 
+        # RFC 8659 CAA processing walks from the exact target toward the DNS
+        # root and stops at the first non-empty RRset. Do this before the
+        # general root/target inventory so the policy lookup itself retains its
+        # required order and stopping semantics.
+        self.caa = collect_caa_policy(
+            self.target_domain,
+            self.dns_query_result,
+        )
+        self.rdap["caa_source"] = self.caa.get("effective_name")
+
         # Registration/domain checks always use the registered root domain.
         # Web checks continue to use the exact target host supplied by the user.
         root = {}
-        root_results: dict[str, DnsQueryResult] = {}
         for rt in COMMON_DNS_TYPES:
             result = self.dns_query_result(self.root_domain, rt)
-            root_results[rt] = result
             root[rt] = list(result.records)
         ds_result = self.dns_query_result(self.root_domain, "DS")
-        root_results["DS"] = ds_result
         root["DS"] = list(ds_result.records)
         self.dns_records[self.root_domain] = root
 
-        target_results: dict[str, DnsQueryResult] = {}
         if self.target_domain != self.root_domain:
             target = {}
             for rt in COMMON_DNS_TYPES:
                 result = self.dns_query_result(self.target_domain, rt)
-                target_results[rt] = result
                 target[rt] = list(result.records)
             self.dns_records[self.target_domain] = target
 
@@ -234,27 +336,4 @@ class DomainScanMixin:
             self.add_check("Domain", "DNSSEC", "warn",
                            f"Nie wykryto delegacji DNSSEC dla {self.root_domain}.", 7, 0)
 
-        # CAA can exist at the exact host; if absent, CA processing walks upward.
-        root_caa_result = root_results["CAA"]
-        target_caa_result = (
-            target_results.get("CAA")
-            if self.target_domain != self.root_domain
-            else None
-        )
-        target_caa = list(target_caa_result.records) if target_caa_result else []
-        caa = target_caa or root.get("CAA", [])
-        self.rdap["caa_source"] = self.target_domain if target_caa else self.root_domain
-        if caa:
-            self.add_check("Domain", "CAA", "pass",
-                           f"Wykryto {len(caa)} rekord(y) CAA (źródło: {self.rdap['caa_source']}).", 3, 3)
-        elif root_caa_result.failed or (target_caa_result and target_caa_result.failed):
-            failed = target_caa_result if target_caa_result and target_caa_result.failed else root_caa_result
-            self.add_check(
-                "Domain", "CAA", "unknown",
-                f"Nie można wiarygodnie potwierdzić braku CAA: zapytanie DNS zakończyło się "
-                f"błędem ({self._dns_unavailable_message(failed)}).",
-                3, 0, False
-            )
-        else:
-            self.add_check("Domain", "CAA", "warn",
-                           "Brak rekordu CAA na hoście docelowym i domenie bazowej.", 3, 0)
+        self._add_caa_findings()
