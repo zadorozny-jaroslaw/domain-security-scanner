@@ -62,6 +62,8 @@ class DnsQueryCacheKey:
     transport: DnsTransport | None = None
     server_name: str | None = None
     server_ip: str | None = None
+    edns_version: int | None = None
+    edns_payload: int | None = None
 
     @classmethod
     def build(
@@ -73,6 +75,8 @@ class DnsQueryCacheKey:
         transport: DnsTransport | str | None = None,
         server_name: str | None = None,
         server_ip: str | None = None,
+        edns_version: int | None = None,
+        edns_payload: int | None = None,
     ) -> "DnsQueryCacheKey":
         """Normalize DNS query context into a stable cache key."""
         normalized_server_name = (
@@ -85,6 +89,23 @@ class DnsQueryCacheKey:
             if server_ip is not None
             else None
         )
+
+        if edns_version is not None:
+            if isinstance(edns_version, bool):
+                raise TypeError("EDNS version must be an integer or None.")
+            edns_version = int(edns_version)
+            if edns_version < 0:
+                raise ValueError("EDNS version must be zero or greater.")
+
+        if edns_payload is not None:
+            if edns_version is None:
+                raise ValueError("EDNS payload requires an enabled EDNS version.")
+            if isinstance(edns_payload, bool):
+                raise TypeError("EDNS payload must be an integer or None.")
+            edns_payload = int(edns_payload)
+            if not 512 <= edns_payload <= 65535:
+                raise ValueError("EDNS payload must be between 512 and 65535 bytes.")
+
         return cls(
             qname=str(qname).strip().lower().rstrip("."),
             qtype=str(qtype).strip().upper(),
@@ -92,6 +113,8 @@ class DnsQueryCacheKey:
             transport=DnsTransport(transport) if transport is not None else None,
             server_name=normalized_server_name,
             server_ip=normalized_server_ip,
+            edns_version=edns_version,
+            edns_payload=edns_payload,
         )
 
 
@@ -121,6 +144,12 @@ class DnsQueryResult:
     authority_section: tuple[str, ...] = ()
     additional_section: tuple[str, ...] = ()
     elapsed_ms: float | None = None
+
+    # Request metadata is appended to preserve the positional layout of all
+    # pre-existing DnsQueryResult fields. It distinguishes a normal query from
+    # a bounded EDNS(0) probe even if the server omits OPT in its response.
+    request_edns_version: int | None = None
+    request_edns_payload: int | None = None
 
     @property
     def qname(self) -> str:

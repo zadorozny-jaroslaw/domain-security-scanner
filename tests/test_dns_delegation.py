@@ -33,6 +33,7 @@ def _result(
     rcode=None,
     aa=None,
     tc=None,
+    answer_section=(),
     authority_section=(),
     additional_section=(),
 ):
@@ -49,6 +50,7 @@ def _result(
         rcode=rcode,
         aa=aa,
         tc=tc,
+        answer_section=tuple(answer_section),
         authority_section=tuple(authority_section),
         additional_section=tuple(additional_section),
     )
@@ -182,6 +184,37 @@ class ParentDelegationHelpersTest(unittest.TestCase):
         )
 
         self.assertIsNone(referral_from_result(result, "example.com"))
+
+    def test_referral_accepts_authoritative_parent_answer_section(self):
+        result = _result(
+            "example.com",
+            "NS",
+            DnsQueryState.ANSWER,
+            query_mode=DnsQueryMode.AUTHORITATIVE,
+            transport=DnsTransport.UDP,
+            server_name="a.parent.example",
+            server_ip="192.0.2.53",
+            rcode="NOERROR",
+            aa=True,
+            tc=False,
+            answer_section=(
+                "example.com. 172800 IN NS ns2.example.net.\n"
+                "example.com. 172800 IN NS ns1.example.net.",
+            ),
+            additional_section=(
+                "ns1.example.net. 172800 IN A 192.0.2.10",
+            ),
+        )
+
+        referral = referral_from_result(result, "example.com")
+
+        self.assertIsNotNone(referral)
+        self.assertEqual(
+            referral.nameservers,
+            ("ns1.example.net", "ns2.example.net"),
+        )
+        self.assertEqual(len(referral.glue), 1)
+        self.assertEqual(referral.glue[0].ipv4, ("192.0.2.10",))
 
 
 class ParentDelegationCollectionTest(unittest.TestCase):
@@ -321,6 +354,93 @@ class ParentDelegationCollectionTest(unittest.TestCase):
             MAX_PARENT_DELEGATION_ATTEMPTS,
         )
         self.assertNotIn(("p5.parent.example", "A"), harness.recursive_calls)
+
+    def test_parent_referral_attempts_are_spread_across_parent_nameservers(self):
+        referral = _result(
+            "example.com",
+            "NS",
+            DnsQueryState.NOT_AUTHORITATIVE,
+            query_mode=DnsQueryMode.AUTHORITATIVE,
+            transport=DnsTransport.UDP,
+            server_name="p2.parent.example",
+            server_ip="192.0.2.20",
+            rcode="NOERROR",
+            aa=False,
+            tc=False,
+            authority_section=(
+                "example.com. 172800 IN NS ns1.example.net.\n"
+                "example.com. 172800 IN NS ns2.example.net.",
+            ),
+        )
+        recursive = {
+            ("com", "NS"): _result(
+                "com", "NS", DnsQueryState.ANSWER,
+                (
+                    "p1.parent.example.",
+                    "p2.parent.example.",
+                    "p3.parent.example.",
+                    "p4.parent.example.",
+                ),
+            ),
+            ("p1.parent.example", "A"): _result(
+                "p1.parent.example", "A", DnsQueryState.ANSWER,
+                ("192.0.2.10", "192.0.2.11", "192.0.2.12", "192.0.2.13"),
+            ),
+            ("p1.parent.example", "AAAA"): _result(
+                "p1.parent.example", "AAAA", DnsQueryState.ANSWER,
+                ("2001:db8::10",),
+            ),
+            ("p2.parent.example", "A"): _result(
+                "p2.parent.example", "A", DnsQueryState.ANSWER,
+                ("192.0.2.20",),
+            ),
+            ("p2.parent.example", "AAAA"): _result(
+                "p2.parent.example", "AAAA", DnsQueryState.ANSWER,
+                ("2001:db8::20",),
+            ),
+            ("p3.parent.example", "A"): _result(
+                "p3.parent.example", "A", DnsQueryState.ANSWER,
+                ("192.0.2.30",),
+            ),
+            ("p3.parent.example", "AAAA"): _result(
+                "p3.parent.example", "AAAA", DnsQueryState.NO_ANSWER,
+            ),
+            ("p4.parent.example", "A"): _result(
+                "p4.parent.example", "A", DnsQueryState.ANSWER,
+                ("192.0.2.40",),
+            ),
+            ("p4.parent.example", "AAAA"): _result(
+                "p4.parent.example", "AAAA", DnsQueryState.NO_ANSWER,
+            ),
+        }
+        harness = _Harness(
+            "example.com",
+            recursive=recursive,
+            direct_map={
+                (
+                    "example.com", "NS", "p2.parent.example",
+                    "192.0.2.20", DnsTransport.UDP,
+                ): referral
+            },
+        )
+
+        evidence = harness.collect_parent_delegation()
+
+        self.assertTrue(evidence.available)
+        self.assertEqual(
+            harness.direct_calls[:2],
+            [
+                (
+                    "example.com", "NS", "p1.parent.example",
+                    "192.0.2.10", DnsTransport.UDP,
+                ),
+                (
+                    "example.com", "NS", "p2.parent.example",
+                    "192.0.2.20", DnsTransport.UDP,
+                ),
+            ],
+        )
+        self.assertEqual(len(harness.direct_calls), 2)
 
 
 class DelegatedNameserverCollectionTest(unittest.TestCase):

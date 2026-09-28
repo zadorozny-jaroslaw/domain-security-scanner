@@ -1,0 +1,304 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .authoritative import AuthoritativeDnsEvidence
+from .authoritative_analysis import (
+    EDNS_ANOMALY,
+    EDNS_NOT_TESTED,
+    EDNS_OK,
+    EDNS_UNKNOWN,
+    SOA_AUTHORITY_AUTHORITATIVE,
+    SOA_AUTHORITY_MIXED,
+    SOA_AUTHORITY_NOT_AUTHORITATIVE,
+    SOA_AUTHORITY_NO_SOA,
+    SOA_AUTHORITY_UNKNOWN,
+    SOA_AUTHORITY_UNPROBED,
+    TRANSPORT_BOTH_RESPOND,
+    TRANSPORT_NO_RESPONSE,
+    TRANSPORT_TCP_ONLY,
+    TRANSPORT_UDP_ONLY,
+    AuthoritativeDnsAnalysis,
+)
+
+
+@dataclass(frozen=True)
+class AuthoritativeDnsFinding:
+    """One non-scoring issue #15 Domain finding."""
+
+    name: str
+    status: str
+    message: str
+    weight: float = 0
+    earned: float = 0
+    applicable: bool = True
+
+
+def _names(values) -> str:
+    return ", ".join(values)
+
+
+def _servers_by_authority(analysis: AuthoritativeDnsAnalysis, *states: str) -> tuple[str, ...]:
+    return tuple(server.name for server in analysis.servers if server.soa_authority_status in states)
+
+
+def _transport_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
+    endpoints = [endpoint for server in analysis.servers for endpoint in server.transport]
+    if not endpoints:
+        return AuthoritativeDnsFinding(
+            "Authoritative DNS transport",
+            "unknown",
+            "Brak bezpośrednich odpowiedzi z autorytatywnych endpointów; transport UDP/TCP nie może zostać oceniony.",
+            applicable=False,
+        )
+
+    asymmetric = [
+        f"{endpoint.server_name} ({endpoint.server_ip})"
+        for endpoint in endpoints
+        if endpoint.status in {TRANSPORT_UDP_ONLY, TRANSPORT_TCP_ONLY}
+    ]
+    no_response = [
+        f"{endpoint.server_name} ({endpoint.server_ip})"
+        for endpoint in endpoints
+        if endpoint.status == TRANSPORT_NO_RESPONSE
+    ]
+    if asymmetric or no_response:
+        details = []
+        if asymmetric:
+            details.append("odpowiedź uzyskano tylko jednym transportem: " + _names(asymmetric))
+        if no_response:
+            details.append("brak odpowiedzi UDP i TCP: " + _names(no_response))
+        return AuthoritativeDnsFinding(
+            "Authoritative DNS transport",
+            "unknown",
+            "Nie potwierdzono pełnej dostępności UDP/TCP dla wszystkich testowanych endpointów; "
+            + "; ".join(details)
+            + ". Wynik wymaga weryfikacji z innej ścieżki sieciowej.",
+            applicable=False,
+        )
+
+    if all(endpoint.status == TRANSPORT_BOTH_RESPOND for endpoint in endpoints):
+        return AuthoritativeDnsFinding(
+            "Authoritative DNS transport",
+            "pass",
+            "Każdy testowany endpoint autorytatywny zwrócił odpowiedź zarówno przez UDP, jak i TCP.",
+        )
+
+    return AuthoritativeDnsFinding(
+        "Authoritative DNS transport",
+        "unknown",
+        "Stan transportu UDP/TCP jest niejednoznaczny.",
+        applicable=False,
+    )
+
+
+def _soa_authority_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
+    if not analysis.servers:
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA service",
+            "unknown",
+            "Brak użytecznych delegowanych serwerów do bezpośredniego testu SOA.",
+            applicable=False,
+        )
+
+    not_authoritative = _servers_by_authority(analysis, SOA_AUTHORITY_NOT_AUTHORITATIVE)
+    no_soa = _servers_by_authority(analysis, SOA_AUTHORITY_NO_SOA)
+    mixed = _servers_by_authority(analysis, SOA_AUTHORITY_MIXED)
+    unknown = _servers_by_authority(
+        analysis,
+        SOA_AUTHORITY_UNKNOWN,
+        SOA_AUTHORITY_UNPROBED,
+    )
+
+    if not_authoritative:
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA service",
+            "fail",
+            "Delegowane serwery odpowiedziały bez autorytatywnej odpowiedzi SOA dla strefy: "
+            + _names(not_authoritative)
+            + ".",
+        )
+    if no_soa or mixed:
+        details = []
+        if no_soa:
+            details.append("brak potwierdzonego SOA: " + _names(no_soa))
+        if mixed:
+            details.append("mieszane wyniki między endpointami/transportami: " + _names(mixed))
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA service",
+            "warn",
+            "Nie wszystkie odpowiedzi delegowanych NS potwierdzają spójne autorytatywne SOA; "
+            + "; ".join(details)
+            + ".",
+        )
+    if unknown:
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA service",
+            "unknown",
+            "Nie udało się wiarygodnie potwierdzić autorytatywnego SOA dla: "
+            + _names(unknown)
+            + ".",
+            applicable=False,
+        )
+    if all(server.soa_authority_status == SOA_AUTHORITY_AUTHORITATIVE for server in analysis.servers):
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA service",
+            "pass",
+            "Każdy testowany delegowany serwer zwrócił autorytatywne SOA dla strefy.",
+        )
+    return AuthoritativeDnsFinding(
+        "Authoritative SOA service",
+        "unknown",
+        "Stan autorytatywnej obsługi SOA jest niejednoznaczny.",
+        applicable=False,
+    )
+
+
+def _soa_config_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
+    if analysis.soa_configuration_consistent is True:
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA consistency",
+            "pass",
+            "Zaobserwowane serwery autorytatywne mają zgodne pola SOA MNAME/refresh/retry/expire/minimum.",
+        )
+    if analysis.soa_configuration_consistent is False:
+        fields = _names(analysis.soa_differing_fields) or "pola SOA"
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA consistency",
+            "warn",
+            "Zaobserwowano różnice konfiguracji SOA między odpowiedziami autorytatywnymi; różniące się pola: "
+            + fields
+            + ".",
+        )
+    return AuthoritativeDnsFinding(
+        "Authoritative SOA consistency",
+        "unknown",
+        "Brak wystarczająco kompletnego zestawu autorytatywnych SOA do wiarygodnego porównania konfiguracji.",
+        applicable=False,
+    )
+
+
+def _serial_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
+    if analysis.soa_serial_consistent is True:
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA serial",
+            "pass",
+            "Zaobserwowane serwery autorytatywne zwróciły ten sam numer seryjny SOA.",
+        )
+    if analysis.soa_serial_consistent is False:
+        details = "; ".join(
+            f"{name}: {', '.join(str(value) for value in serials)}"
+            for name, serials in analysis.soa_serials
+        )
+        suffix = f" ({details})" if details else ""
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA serial",
+            "info",
+            "Zaobserwowano różne numery seryjne SOA między serwerami autorytatywnymi"
+            + suffix
+            + ". Może to być przejściowy stan propagacji strefy.",
+        )
+    return AuthoritativeDnsFinding(
+        "Authoritative SOA serial",
+        "unknown",
+        "Brak wystarczająco kompletnego zestawu SOA do porównania numerów seryjnych.",
+        applicable=False,
+    )
+
+
+def _ns_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
+    if analysis.ns_rrset_consistent is True:
+        return AuthoritativeDnsFinding(
+            "Authoritative NS RRset consistency",
+            "pass",
+            "Testowane serwery autorytatywne zwróciły zgodny apex NS RRset.",
+        )
+    if analysis.ns_rrset_consistent is False:
+        details = "; ".join(
+            f"{name}: {', '.join(values)}"
+            for name, values in analysis.observed_ns_rrsets
+        )
+        suffix = f" ({details})" if details else ""
+        return AuthoritativeDnsFinding(
+            "Authoritative NS RRset consistency",
+            "warn",
+            "Zaobserwowano materialną różnicę apex NS RRset między serwerami autorytatywnymi"
+            + suffix
+            + ".",
+        )
+    return AuthoritativeDnsFinding(
+        "Authoritative NS RRset consistency",
+        "unknown",
+        "Brak kompletnego zestawu autorytatywnych odpowiedzi NS do porównania RRsetów.",
+        applicable=False,
+    )
+
+
+def _edns_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
+    if not analysis.servers:
+        return AuthoritativeDnsFinding(
+            "Authoritative EDNS(0)",
+            "unknown",
+            "Brak użytecznych serwerów do ograniczonej obserwacji EDNS(0).",
+            applicable=False,
+        )
+
+    anomalies = tuple(server.name for server in analysis.servers if server.edns_status == EDNS_ANOMALY)
+    unknown = tuple(
+        server.name
+        for server in analysis.servers
+        if server.edns_status in {EDNS_UNKNOWN, EDNS_NOT_TESTED}
+    )
+    if anomalies:
+        return AuthoritativeDnsFinding(
+            "Authoritative EDNS(0)",
+            "warn",
+            "Zwykłe zapytanie UDP SOA działało, ale ograniczone zapytanie EDNS(0) zwróciło anomalię dla: "
+            + _names(anomalies)
+            + ". Obserwacja jest doradcza i nie stanowi pełnego testu EDNS.",
+        )
+    if unknown:
+        return AuthoritativeDnsFinding(
+            "Authoritative EDNS(0)",
+            "unknown",
+            "Nie udało się jednoznacznie porównać zwykłego UDP z EDNS(0) dla: "
+            + _names(unknown)
+            + ".",
+            applicable=False,
+        )
+    if all(server.edns_status == EDNS_OK for server in analysis.servers):
+        return AuthoritativeDnsFinding(
+            "Authoritative EDNS(0)",
+            "pass",
+            "Ograniczone zapytanie EDNS(0) SOA zakończyło się poprawnie na każdym testowanym serwerze.",
+        )
+    return AuthoritativeDnsFinding(
+        "Authoritative EDNS(0)",
+        "unknown",
+        "Stan obserwacji EDNS(0) jest niejednoznaczny.",
+        applicable=False,
+    )
+
+
+def build_authoritative_dns_findings(
+    evidence: AuthoritativeDnsEvidence,
+    analysis: AuthoritativeDnsAnalysis,
+) -> tuple[AuthoritativeDnsFinding, ...]:
+    """Convert issue #15 analysis into conservative, non-scoring checks."""
+    # Keep evidence in the signature deliberately: later report/scoring work can
+    # use collection completeness without changing the findings API.
+    _ = evidence
+    return (
+        _transport_finding(analysis),
+        _soa_authority_finding(analysis),
+        _soa_config_finding(analysis),
+        _serial_finding(analysis),
+        _ns_finding(analysis),
+        _edns_finding(analysis),
+    )
+
+
+__all__ = [
+    "AuthoritativeDnsFinding",
+    "build_authoritative_dns_findings",
+]

@@ -7,6 +7,7 @@ from .dns_evidence import DnsEvidenceMixin
 from .domains.cms import CmsScanMixin
 from .domains.discovery import DiscoveryScanMixin
 from .domains.domain import DomainScanMixin
+from .domains.domain.authoritative import AuthoritativeDnsScanMixin
 from .domains.domain.delegation import DelegationScanMixin
 from .domains.mail import MailScanMixin
 from .domains.tls import TlsScanMixin
@@ -24,6 +25,7 @@ from .version import __version__
 class Scanner(
     DnsEvidenceMixin,
     DelegationScanMixin,
+    AuthoritativeDnsScanMixin,
     DomainScanMixin,
     MailScanMixin,
     DiscoveryScanMixin,
@@ -45,6 +47,8 @@ class Scanner(
         super().__init__(domain, max_pages=max_pages, max_hosts=max_hosts)
         self.delegation = None
         self.delegation_analysis = None
+        self.authoritative_dns = None
+        self.authoritative_dns_analysis = None
 
         self.scan_groups = normalize_scan_groups(scan_groups)
         self.scan_selection = build_scan_selection_context(self.scan_groups)

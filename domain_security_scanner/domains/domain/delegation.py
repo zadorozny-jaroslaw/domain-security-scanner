@@ -197,23 +197,26 @@ def referral_from_result(
     result: DnsQueryResult,
     zone: str,
 ) -> DelegationReferral | None:
-    """Extract an NS referral for ``zone`` from direct parent-server evidence.
+    """Extract an NS delegation for ``zone`` from direct parent-server evidence.
 
-    A normal parent referral has ``AA=0`` for the child name, so the shared
-    authoritative query layer correctly labels it ``NOT_AUTHORITATIVE`` when
-    interpreted as child-authority evidence. For delegation discovery, the raw
-    NOERROR authority/additional sections are the relevant evidence instead.
+    Parent servers can expose the child delegation NS RRset either as a referral
+    in the Authority section or as authoritative delegation data in the Answer
+    section. Both forms are usable here as long as the response is NOERROR and
+    not truncated. Glue is still taken only from Additional.
     """
     zone_name = normalize_dns_name(zone)
     if result.rcode != "NOERROR" or result.tc is True:
         return None
 
-    authority = _section_records(result.authority_section)
+    delegation_records = (
+        _section_records(result.answer_section)
+        + _section_records(result.authority_section)
+    )
     nameservers = tuple(
         sorted(
             {
                 normalize_dns_name(rdata)
-                for owner, rtype, rdata in authority
+                for owner, rtype, rdata in delegation_records
                 if owner == zone_name and rtype == "NS"
             }
         )
@@ -302,7 +305,12 @@ class DelegationScanMixin:
         address_evidence: list[NameserverAddressEvidence] = []
         delegation_queries: list[DnsQueryResult] = []
         attempts = 0
+        usable_parent_servers = 0
 
+        # Resolve enough distinct parent nameservers to spread the bounded
+        # direct-query budget across independent servers. Previously one parent
+        # with several A/AAAA addresses could consume all four attempts before
+        # any other parent was tried.
         for parent_ns in parent_nameservers:
             a_result = self.dns_query_result(parent_ns, "A")
             aaaa_result = self.dns_query_result(parent_ns, "AAAA")
@@ -316,15 +324,33 @@ class DelegationScanMixin:
                 aaaa_result=aaaa_result,
             )
             address_evidence.append(addresses)
+            if addresses.addresses:
+                usable_parent_servers += 1
+            if usable_parent_servers >= MAX_PARENT_DELEGATION_ATTEMPTS:
+                break
 
-            for server_ip in addresses.addresses:
+        # Probe breadth-first: first address of each parent, then second
+        # addresses only if budget remains. NameserverAddressEvidence orders
+        # IPv4 before IPv6, so hosts without IPv6 connectivity do not spend
+        # the budget on unreachable IPv6 endpoints before other parents are
+        # given a chance.
+        address_index = 0
+        while attempts < MAX_PARENT_DELEGATION_ATTEMPTS:
+            attempted_in_round = False
+
+            for addresses in address_evidence:
                 if attempts >= MAX_PARENT_DELEGATION_ATTEMPTS:
                     break
+                if address_index >= len(addresses.addresses):
+                    continue
+
+                attempted_in_round = True
+                server_ip = addresses.addresses[address_index]
                 attempts += 1
                 result = self.authoritative_dns_query_result(
                     zone,
                     "NS",
-                    server_name=parent_ns,
+                    server_name=addresses.name,
                     server_ip=server_ip,
                     transport=DnsTransport.UDP,
                     timeout=DELEGATION_DIRECT_TIMEOUT,
@@ -341,14 +367,15 @@ class DelegationScanMixin:
                         delegation_queries=tuple(delegation_queries),
                         delegated_nameservers=referral.nameservers,
                         glue=referral.glue,
-                        source_server_name=parent_ns,
+                        source_server_name=addresses.name,
                         source_server_ip=server_ip,
                     )
                     self.delegation = evidence
                     return evidence
 
-            if attempts >= MAX_PARENT_DELEGATION_ATTEMPTS:
+            if not attempted_in_round:
                 break
+            address_index += 1
 
         evidence = ParentDelegationEvidence(
             zone=zone,
