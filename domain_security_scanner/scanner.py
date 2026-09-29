@@ -9,6 +9,7 @@ from .domains.discovery import DiscoveryScanMixin
 from .domains.domain import DomainScanMixin
 from .domains.domain.authoritative import AuthoritativeDnsScanMixin
 from .domains.domain.delegation import DelegationScanMixin
+from .domains.domain.dnssec import DnssecScanMixin, dnssec_report_data
 from .domains.mail import MailScanMixin
 from .domains.tls import TlsScanMixin
 from .domains.web import WebScanMixin
@@ -26,6 +27,7 @@ class Scanner(
     DnsEvidenceMixin,
     DelegationScanMixin,
     AuthoritativeDnsScanMixin,
+    DnssecScanMixin,
     DomainScanMixin,
     MailScanMixin,
     DiscoveryScanMixin,
@@ -49,6 +51,8 @@ class Scanner(
         self.delegation_analysis = None
         self.authoritative_dns = None
         self.authoritative_dns_analysis = None
+        self.dnssec = None
+        self.dnssec_analysis = None
 
         self.scan_groups = normalize_scan_groups(scan_groups)
         self.scan_selection = build_scan_selection_context(self.scan_groups)
@@ -138,11 +142,17 @@ class Scanner(
             "host_inventory": self.host_inventory(),
             "emails": sorted(self.emails),
             "dns_records": self.dns_records,
+            "dns": {
+                "dnssec": dnssec_report_data(
+                    getattr(self, "dnssec", None),
+                    getattr(self, "dnssec_analysis", None),
+                ),
+            },
             "limitations": [
                 "To jest zewnętrzny, niskoinwazyjny health check, a nie pełny pentest.",
                 "Brak wyniku DKIM dla popularnych selektorów nie oznacza braku DKIM.",
                 "Certificate Transparency jest historyczne; nazwa jest oznaczana jako historyczna tylko przy aktualnym NXDOMAIN, a błędy resolvera pozostają jako stan nieznany.",
-                "DNSSEC jest wykrywany na podstawie delegacji/DS/RDAP; skrypt nie wykonuje pełnej walidacji kryptograficznej łańcucha.",
+                "Walidacja DNSSEC jest ograniczona do parent DS, DNSKEY oraz wybranych apex RRsetów SOA/NS; wynik secure nie oznacza pełnej walidacji każdego RRsetu w strefie.",
                 "Dla .pl brak informacji o Registry Lock w RDAP nie oznacza, że blokady nie ma.",
                 "Wynik nie obejmuje bezpieczeństwa kont, MFA, endpointów, backupu, uprawnień ani konfiguracji wewnętrznej.",
                 "CMS/platforma jest wykrywana pasywnie. Brak detekcji nie oznacza braku CMS, a wersja jest raportowana tylko wtedy, gdy jest jawnie ujawniona.",

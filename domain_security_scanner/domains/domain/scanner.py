@@ -42,7 +42,6 @@ class DomainScanMixin:
         errors = []
 
         labels = self.target_domain.split(".")
-        # At least two labels remain. RDAP decides the real registration boundary.
         candidates = [".".join(labels[i:]) for i in range(0, max(1, len(labels) - 1))]
 
         if base:
@@ -66,8 +65,6 @@ class DomainScanMixin:
                     errors.append(f"{candidate}: {e}")
 
         if data is None:
-            # Continue scanning with a conservative fallback even when RDAP is
-            # unavailable. This is especially useful during temporary network issues.
             self.root_domain = fallback_root_domain(self.target_domain)
             self.subdomains.add(self.root_domain)
             self.rdap = {
@@ -288,23 +285,14 @@ class DomainScanMixin:
 
     def collect_domain_dns(self):
         """Collect root/target DNS inventory and evaluate domain-level DNS posture."""
-        # Delegation evidence is collected by DelegationScanMixin before this
-        # existing Domain step. Emit findings here so the old RDAP-only
-        # nameserver redundancy check is replaced rather than duplicated.
         self._add_delegation_findings()
 
-        # RFC 8659 CAA processing walks from the exact target toward the DNS
-        # root and stops at the first non-empty RRset. Do this before the
-        # general root/target inventory so the policy lookup itself retains its
-        # required order and stopping semantics.
         self.caa = collect_caa_policy(
             self.target_domain,
             self.dns_query_result,
         )
         self.rdap["caa_source"] = self.caa.get("effective_name")
 
-        # Registration/domain checks always use the registered root domain.
-        # Web checks continue to use the exact target host supplied by the user.
         root = {}
         for rt in COMMON_DNS_TYPES:
             result = self.dns_query_result(self.root_domain, rt)
@@ -320,20 +308,7 @@ class DomainScanMixin:
                 target[rt] = list(result.records)
             self.dns_records[self.target_domain] = target
 
-        ds = root["DS"]
-        rdap_signed = self.rdap.get("dnssec_rdap")
-        if ds or rdap_signed is True:
-            self.add_check("Domain", "DNSSEC", "pass",
-                           f"Wykryto delegację DNSSEC dla {self.root_domain}.", 7, 7)
-        elif ds_result.failed:
-            self.add_check(
-                "Domain", "DNSSEC", "unknown",
-                f"Nie można wiarygodnie ocenić DNSSEC: zapytanie DS zakończyło się "
-                f"błędem ({self._dns_unavailable_message(ds_result)}).",
-                7, 0, False
-            )
-        else:
-            self.add_check("Domain", "DNSSEC", "warn",
-                           f"Nie wykryto delegacji DNSSEC dla {self.root_domain}.", 7, 0)
-
+        # DNSSEC scoring is emitted by DnssecScanMixin from direct parent/child
+        # evidence and cryptographic validation. Recursive DS and RDAP metadata
+        # remain inventory/context only and must not imply a secure state.
         self._add_caa_findings()

@@ -170,6 +170,21 @@ class DnssecEvidenceCollectorMixin:
                 server_ip=parent_ip,
             )
 
+        # An authoritative parent NODATA response for DS conclusively means the
+        # delegation is unsigned. Do not query child DNSKEY/SOA/NS in that case:
+        # those queries cannot change the DNSSEC state and would add unnecessary
+        # network traffic to the low-impact scan.
+        if (
+            parent_ds is not None
+            and parent_ds.result.state == DnsQueryState.NO_ANSWER
+        ):
+            return DnssecEvidence(
+                zone=zone,
+                parent_ds=parent_ds,
+                child_probe_limit=MAX_DNSSEC_CHILD_ENDPOINT_PROBES,
+                child_probe_limit_reached=False,
+            )
+
         all_available = dnssec_child_endpoints(
             delegation,
             limit=max(
@@ -219,6 +234,156 @@ class DnssecEvidenceCollectorMixin:
         )
 
 
+def _rrset_rdata(result: DnsQueryResult | None, rdtype: str) -> list[str]:
+    """Return RDATA values of one type from stored answer-section RRsets."""
+    if result is None:
+        return []
+    target = rdtype.upper()
+    values: list[str] = []
+    for rrset_text in result.answer_section:
+        for line in str(rrset_text).splitlines():
+            parts = line.split(None, 4)
+            if len(parts) == 5 and parts[3].upper() == target:
+                values.append(parts[4].strip())
+    return values
+
+
+def _query_report(evidence: DnssecQueryEvidence | None) -> dict | None:
+    if evidence is None:
+        return None
+    result = evidence.result
+    return {
+        "qtype": evidence.qtype,
+        "server_name": evidence.server_name,
+        "server_ip": evidence.server_ip,
+        "transport": result.transport.value if result.transport else None,
+        "state": result.state.value,
+        "rcode": result.rcode,
+        "authoritative": result.aa,
+        "truncated": result.tc,
+        "want_dnssec": result.request_want_dnssec,
+        "error": result.error,
+    }
+
+
+def dnssec_report_data(
+    evidence: DnssecEvidence | None,
+    analysis=None,
+) -> dict:
+    """Serialize bounded issue #16 evidence without claiming whole-zone validation."""
+    if evidence is None or analysis is None:
+        return {
+            "status": "unknown",
+            "policy_version": None,
+            "scope": {
+                "validation_targets": ["DNSKEY", "SOA", "NS"],
+                "validated_rrsets": [],
+                "complete_zone_validation": False,
+            },
+        }
+
+    parent_result = evidence.parent_ds.result if evidence.parent_ds else None
+    dnskey_result = (
+        evidence.selected_dnskey.result if evidence.selected_dnskey else None
+    )
+    signatures = {}
+    steps = []
+    for step in analysis.steps:
+        item = {
+            "name": step.name,
+            "outcome": step.outcome.value,
+            "message": step.message,
+        }
+        if step.signatures is not None:
+            summary = {
+                "total": step.signatures.total,
+                "current": step.signatures.current,
+                "expired": step.signatures.expired,
+                "not_yet_valid": step.signatures.not_yet_valid,
+                "valid": step.signatures.valid,
+                "invalid": step.signatures.invalid,
+                "unsupported": step.signatures.unsupported,
+            }
+            item["signatures"] = summary
+            signatures[step.name] = summary
+        steps.append(item)
+
+    validation_targets = ["DNSKEY", *DNSSEC_APEX_RRTYPES]
+    validated_by_step = {
+        "DNSKEY RRset": "DNSKEY",
+        "Apex SOA": "SOA",
+        "Apex NS": "NS",
+    }
+    validated_rrsets = [
+        validated_by_step[step.name]
+        for step in analysis.steps
+        if step.name in validated_by_step
+        and getattr(step.outcome, "value", step.outcome) == "pass"
+    ]
+
+    return {
+        "status": analysis.state.value,
+        "reason": analysis.reason,
+        "zone": evidence.zone,
+        "policy_version": analysis.policy_version,
+        "ds": _rrset_rdata(parent_result, "DS"),
+        "dnskeys": _rrset_rdata(dnskey_result, "DNSKEY"),
+        "matching_key_tags": list(analysis.matched_key_tags),
+        "rrsig": signatures,
+        "queries": {
+            "parent_ds": _query_report(evidence.parent_ds),
+            "dnskey_attempts": [
+                _query_report(item) for item in evidence.dnskey_attempts
+            ],
+            "apex_rrsets": [
+                _query_report(item) for item in evidence.apex_rrsets
+            ],
+        },
+        "validation_steps": steps,
+        "scope": {
+            "validation_targets": validation_targets,
+            "validated_rrsets": validated_rrsets,
+            "complete_zone_validation": False,
+            "child_probe_limit": evidence.child_probe_limit,
+            "child_probe_limit_reached": evidence.child_probe_limit_reached,
+        },
+    }
+
+
+class DnssecScanMixin(DnssecEvidenceCollectorMixin):
+    """Collect, analyze, report, and emit findings for issue #16 DNSSEC."""
+
+    def collect_domain_dns(self):
+        delegation = getattr(self, "delegation", None)
+        self.dnssec = self.collect_dnssec_evidence(delegation)
+
+        from .dnssec_analysis import analyze_dnssec_evidence
+
+        self.dnssec_analysis = analyze_dnssec_evidence(self.dnssec)
+        result = super().collect_domain_dns()
+        self._add_dnssec_findings()
+        return result
+
+    def _add_dnssec_findings(self):
+        evidence = getattr(self, "dnssec", None)
+        analysis = getattr(self, "dnssec_analysis", None)
+        if evidence is None or analysis is None or not hasattr(self, "add_check"):
+            return
+
+        from .dnssec_findings import build_dnssec_findings
+
+        for finding in build_dnssec_findings(evidence, analysis):
+            self.add_check(
+                "Domain",
+                finding.name,
+                finding.status,
+                finding.message,
+                finding.weight,
+                finding.earned,
+                finding.applicable,
+            )
+
+
 __all__ = [
     "DNSSEC_APEX_RRTYPES",
     "DNSSEC_DIRECT_TIMEOUT",
@@ -226,6 +391,8 @@ __all__ = [
     "MAX_DNSSEC_CHILD_ENDPOINT_PROBES",
     "DnssecEvidence",
     "DnssecEvidenceCollectorMixin",
+    "DnssecScanMixin",
     "DnssecQueryEvidence",
     "dnssec_child_endpoints",
+    "dnssec_report_data",
 ]

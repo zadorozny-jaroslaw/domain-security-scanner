@@ -186,6 +186,28 @@ class DnssecCollectorTest(unittest.TestCase):
             self.assertEqual(kwargs["edns_version"], 0)
             self.assertEqual(kwargs["edns_payload"], DNSSEC_EDNS_PAYLOAD)
 
+    def test_unsigned_parent_ds_short_circuits_child_dnssec_queries(self):
+        delegation = _delegation()
+        parent_no_ds = _result(
+            "DS",
+            state=DnsQueryState.NO_ANSWER,
+            server_name="a.gtld-servers.net",
+            server_ip="192.0.2.1",
+        )
+        responses = {
+            ("a.gtld-servers.net", "192.0.2.1", "DS", DnsTransport.UDP): parent_no_ds,
+        }
+        harness = _CollectorHarness(responses)
+
+        evidence = harness.collect_dnssec_evidence(delegation)
+
+        self.assertIsNotNone(evidence.parent_ds)
+        self.assertEqual(evidence.dnskey_attempts, ())
+        self.assertIsNone(evidence.selected_dnskey)
+        self.assertEqual(evidence.apex_rrsets, ())
+        self.assertEqual(len(harness.calls), 1)
+        self.assertEqual(harness.calls[0][1], "DS")
+
     def test_collector_uses_second_child_endpoint_after_unavailable_dnskey(self):
         delegation = _delegation()
         timeout = _result(
