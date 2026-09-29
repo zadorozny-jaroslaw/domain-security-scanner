@@ -40,6 +40,7 @@ class DnsEvidenceMixin:
         server_ip: str | None = None,
         edns_version: int | None = None,
         edns_payload: int | None = None,
+        want_dnssec: bool = False,
     ) -> DnsQueryCacheKey:
         """Build a normalized cache key for one DNS query context."""
         return DnsQueryCacheKey.build(
@@ -51,6 +52,7 @@ class DnsEvidenceMixin:
             server_ip=server_ip,
             edns_version=edns_version,
             edns_payload=edns_payload,
+            want_dnssec=want_dnssec,
         )
 
     @classmethod
@@ -77,6 +79,7 @@ class DnsEvidenceMixin:
         transport: DnsTransport | str = DnsTransport.UDP,
         edns_version: int | None = None,
         edns_payload: int | None = None,
+        want_dnssec: bool = False,
     ) -> DnsQueryCacheKey:
         """Return a context-complete authoritative DNS cache key."""
         return cls._dns_cache_key(
@@ -88,6 +91,7 @@ class DnsEvidenceMixin:
             server_ip=server_ip,
             edns_version=edns_version,
             edns_payload=edns_payload,
+            want_dnssec=want_dnssec,
         )
 
     def dns_cached_result(
@@ -110,6 +114,7 @@ class DnsEvidenceMixin:
         transport: DnsTransport | str = DnsTransport.UDP,
         edns_version: int | None = None,
         edns_payload: int | None = None,
+        want_dnssec: bool = False,
     ) -> DnsQueryResult | None:
         """Return cached evidence for one authoritative query profile."""
         return self.dns_query_cache.get(
@@ -121,6 +126,7 @@ class DnsEvidenceMixin:
                 transport=transport,
                 edns_version=edns_version,
                 edns_payload=edns_payload,
+                want_dnssec=want_dnssec,
             )
         )
 
@@ -280,13 +286,14 @@ class DnsEvidenceMixin:
         timeout: float = 3.0,
         edns_version: int | None = None,
         edns_payload: int | None = None,
+        want_dnssec: bool = False,
     ) -> DnsQueryResult:
         """Query one DNS server directly over an explicit transport/profile.
 
         ``edns_version=None`` sends an ordinary DNS query without EDNS. Passing
         ``edns_version=0`` with a bounded payload creates a distinct EDNS(0)
-        observation. The query profile is part of the cache key, so an EDNS
-        result can never overwrite or masquerade as the ordinary baseline.
+        observation. ``want_dnssec=True`` requests DNSSEC records using the DO
+        bit and is also part of the cache identity.
 
         The result represents evidence about exactly this server address and
         transport. A timeout, truncated response, transport error, SERVFAIL, or
@@ -300,6 +307,7 @@ class DnsEvidenceMixin:
             transport=transport,
             edns_version=edns_version,
             edns_payload=edns_payload,
+            want_dnssec=want_dnssec,
         )
         cached = self.dns_query_cache.get(cache_key)
         if cached is not None:
@@ -319,6 +327,7 @@ class DnsEvidenceMixin:
                 qname,
                 qtype,
                 use_edns=cache_key.edns_version,
+                want_dnssec=cache_key.want_dnssec,
                 payload=cache_key.edns_payload,
                 request_payload=cache_key.edns_payload,
             )
@@ -377,6 +386,7 @@ class DnsEvidenceMixin:
             server_ip=cache_key.server_ip,
             request_edns_version=cache_key.edns_version,
             request_edns_payload=cache_key.edns_payload,
+            request_want_dnssec=cache_key.want_dnssec,
             elapsed_ms=elapsed_ms,
         )
 

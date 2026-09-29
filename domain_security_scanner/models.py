@@ -64,6 +64,7 @@ class DnsQueryCacheKey:
     server_ip: str | None = None
     edns_version: int | None = None
     edns_payload: int | None = None
+    want_dnssec: bool = False
 
     @classmethod
     def build(
@@ -77,6 +78,7 @@ class DnsQueryCacheKey:
         server_ip: str | None = None,
         edns_version: int | None = None,
         edns_payload: int | None = None,
+        want_dnssec: bool = False,
     ) -> "DnsQueryCacheKey":
         """Normalize DNS query context into a stable cache key."""
         normalized_server_name = (
@@ -89,6 +91,16 @@ class DnsQueryCacheKey:
             if server_ip is not None
             else None
         )
+
+        if not isinstance(want_dnssec, bool):
+            raise TypeError("DNSSEC request flag must be a boolean.")
+
+        # dnspython enables EDNS(0) automatically when want_dnssec=True because
+        # the DNSSEC OK bit lives in the EDNS flags. Normalize the cache profile
+        # to that effective wire behavior so implicit and explicit EDNS(0)
+        # DNSSEC requests cannot occupy contradictory cache identities.
+        if want_dnssec and edns_version is None:
+            edns_version = 0
 
         if edns_version is not None:
             if isinstance(edns_version, bool):
@@ -115,6 +127,7 @@ class DnsQueryCacheKey:
             server_ip=normalized_server_ip,
             edns_version=edns_version,
             edns_payload=edns_payload,
+            want_dnssec=want_dnssec,
         )
 
 
@@ -146,10 +159,11 @@ class DnsQueryResult:
     elapsed_ms: float | None = None
 
     # Request metadata is appended to preserve the positional layout of all
-    # pre-existing DnsQueryResult fields. It distinguishes a normal query from
-    # a bounded EDNS(0) probe even if the server omits OPT in its response.
+    # pre-existing DnsQueryResult fields. It distinguishes query profiles even
+    # when the response omits matching protocol metadata.
     request_edns_version: int | None = None
     request_edns_payload: int | None = None
+    request_want_dnssec: bool = False
 
     @property
     def qname(self) -> str:
