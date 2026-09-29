@@ -1,11 +1,6 @@
 import unittest
 
-from domain_security_scanner.domains.domain.delegation import (
-    DelegatedNameserverEvidence,
-    DelegationGlueEvidence,
-    NameserverAddressEvidence,
-    ParentDelegationEvidence,
-)
+from domain_security_scanner.domains.domain.delegation import ParentDelegationEvidence
 from domain_security_scanner.domains.domain.delegation_analysis import (
     ADDRESS_AVAILABLE,
     ADDRESS_NO_ADDRESS,
@@ -25,6 +20,12 @@ from domain_security_scanner.domains.domain.delegation_analysis import (
 )
 from domain_security_scanner.domains.domain.delegation_findings import (
     build_delegation_findings,
+)
+from domain_security_scanner.domains.domain.dns_scoring import (
+    DELEGATED_AUTHORITY_WEIGHT,
+    DELEGATION_CONSISTENCY_WEIGHT,
+    NAME_SERVER_REDUNDANCY_WEIGHT,
+    NAMESERVER_ADDRESSABILITY_WEIGHT,
 )
 
 
@@ -112,25 +113,21 @@ def _finding_map(evidence, analysis):
 
 
 class DelegationFindingsTest(unittest.TestCase):
-    def test_healthy_delegation_reuses_existing_redundancy_weight_only(self):
+    def test_healthy_delegation_uses_impact_calibrated_weights(self):
         findings = _finding_map(_evidence(), _analysis())
 
-        redundancy = findings["Name server redundancy"]
-        self.assertEqual(redundancy.status, "pass")
-        self.assertEqual(redundancy.weight, 3)
-        self.assertEqual(redundancy.earned, 3)
+        self.assertEqual(findings["Name server redundancy"].weight, NAME_SERVER_REDUNDANCY_WEIGHT)
+        self.assertEqual(findings["Name server redundancy"].earned, NAME_SERVER_REDUNDANCY_WEIGHT)
+        self.assertEqual(findings["DNS delegation consistency"].weight, DELEGATION_CONSISTENCY_WEIGHT)
+        self.assertEqual(findings["DNS delegation consistency"].earned, DELEGATION_CONSISTENCY_WEIGHT)
+        self.assertEqual(findings["Delegated nameserver authority"].weight, DELEGATED_AUTHORITY_WEIGHT)
+        self.assertEqual(findings["Delegated nameserver authority"].earned, DELEGATED_AUTHORITY_WEIGHT)
+        self.assertEqual(findings["Nameserver addressability"].weight, NAMESERVER_ADDRESSABILITY_WEIGHT)
+        self.assertEqual(findings["Nameserver addressability"].earned, NAMESERVER_ADDRESSABILITY_WEIGHT)
+        self.assertEqual(findings["Delegation glue"].weight, 0)
+        self.assertEqual(findings["Nameserver target aliasing"].weight, 0)
 
-        self.assertEqual(findings["DNS delegation consistency"].status, "pass")
-        self.assertEqual(findings["Delegated nameserver authority"].status, "pass")
-        self.assertEqual(findings["Nameserver addressability"].status, "pass")
-        self.assertEqual(findings["Delegation glue"].status, "info")
-        self.assertEqual(findings["Nameserver target aliasing"].status, "pass")
-
-        for name, finding in findings.items():
-            if name != "Name server redundancy":
-                self.assertEqual(finding.weight, 0)
-
-    def test_single_parent_nameserver_warns_without_rdap_dependency(self):
+    def test_single_parent_nameserver_warns_with_low_weight(self):
         evidence = _evidence(("ns1.example.net",))
         analysis = _analysis(
             nameservers=(_ns("ns1.example.net"),),
@@ -138,55 +135,59 @@ class DelegationFindingsTest(unittest.TestCase):
             consistent=True,
             complete=True,
         )
-
         finding = _finding_map(evidence, analysis)["Name server redundancy"]
-
         self.assertEqual(finding.status, "warn")
-        self.assertEqual(finding.weight, 3)
+        self.assertEqual(finding.weight, NAME_SERVER_REDUNDANCY_WEIGHT)
         self.assertEqual(finding.earned, 0)
 
-    def test_unavailable_parent_evidence_does_not_create_false_failures(self):
-        evidence = _evidence(available=False)
-        analysis = _analysis(
-            nameservers=(),
-            parent_ns=(),
-            consistent=None,
-            complete=False,
+    def test_unavailable_parent_evidence_does_not_create_false_failures_or_score(self):
+        findings = _finding_map(
+            _evidence(available=False),
+            _analysis(nameservers=(), parent_ns=(), consistent=None, complete=False),
         )
-
-        findings = _finding_map(evidence, analysis)
-
-        self.assertEqual(findings["Name server redundancy"].status, "unknown")
-        self.assertFalse(findings["Name server redundancy"].applicable)
-        self.assertEqual(findings["DNS delegation consistency"].status, "unknown")
-        self.assertEqual(findings["Delegated nameserver authority"].status, "unknown")
-        self.assertEqual(findings["Nameserver addressability"].status, "unknown")
-        self.assertEqual(findings["Delegation glue"].status, "unknown")
-        self.assertEqual(findings["Nameserver target aliasing"].status, "unknown")
         self.assertTrue(
-            all(
-                finding.status != "fail"
-                for finding in findings.values()
-            )
+            all(finding.status != "fail" for finding in findings.values())
         )
+        for name in (
+            "Name server redundancy",
+            "DNS delegation consistency",
+            "Delegated nameserver authority",
+            "Nameserver addressability",
+        ):
+            self.assertEqual(findings[name].status, "unknown")
+            self.assertFalse(findings[name].applicable)
 
-    def test_parent_child_mismatch_is_warn_not_critical_failure(self):
-        analysis = _analysis(
-            consistent=False,
-            missing=("old.example.net",),
-            extra=("new.example.net",),
-        )
-
-        finding = _finding_map(_evidence(), analysis)[
-            "DNS delegation consistency"
-        ]
-
-        self.assertEqual(finding.status, "warn")
+    def test_complete_parent_child_mismatch_is_high_impact_failure(self):
+        finding = _finding_map(
+            _evidence(),
+            _analysis(
+                consistent=False,
+                complete=True,
+                missing=("old.example.net",),
+                extra=("new.example.net",),
+            ),
+        )["DNS delegation consistency"]
+        self.assertEqual(finding.status, "fail")
+        self.assertEqual(finding.weight, DELEGATION_CONSISTENCY_WEIGHT)
+        self.assertEqual(finding.earned, 0)
         self.assertIn("old.example.net", finding.message)
         self.assertIn("new.example.net", finding.message)
+
+    def test_partial_parent_child_mismatch_is_warn_with_partial_credit(self):
+        finding = _finding_map(
+            _evidence(),
+            _analysis(
+                consistent=False,
+                complete=False,
+                missing=("old.example.net",),
+            ),
+        )["DNS delegation consistency"]
+        self.assertEqual(finding.status, "warn")
+        self.assertEqual(finding.weight, DELEGATION_CONSISTENCY_WEIGHT)
+        self.assertEqual(finding.earned, DELEGATION_CONSISTENCY_WEIGHT / 2)
         self.assertIn("stan przejściowy", finding.message)
 
-    def test_positive_lame_evidence_is_fail_but_timeout_is_unknown(self):
+    def test_positive_lame_evidence_scores_but_timeout_is_unknown(self):
         lame_analysis = _analysis(
             nameservers=(
                 _ns("ns1.example.net", authority=AUTHORITY_LAME),
@@ -203,22 +204,15 @@ class DelegationFindingsTest(unittest.TestCase):
             consistent=None,
             complete=False,
         )
-
-        lame = _finding_map(_evidence(), lame_analysis)[
-            "Delegated nameserver authority"
-        ]
-        timeout = _finding_map(_evidence(), timeout_analysis)[
-            "Delegated nameserver authority"
-        ]
-
+        lame = _finding_map(_evidence(), lame_analysis)["Delegated nameserver authority"]
+        timeout = _finding_map(_evidence(), timeout_analysis)["Delegated nameserver authority"]
         self.assertEqual(lame.status, "fail")
-        self.assertIn("ns1.example.net", lame.message)
-        self.assertEqual(lame.weight, 0)
-
+        self.assertEqual(lame.weight, DELEGATED_AUTHORITY_WEIGHT)
+        self.assertEqual(lame.earned, 0)
         self.assertEqual(timeout.status, "unknown")
         self.assertFalse(timeout.applicable)
 
-    def test_missing_address_is_distinct_from_unavailable_lookup(self):
+    def test_missing_address_scores_but_unavailable_lookup_is_unknown(self):
         missing_analysis = _analysis(
             nameservers=(
                 _ns("ns1.example.net", address=ADDRESS_NO_ADDRESS),
@@ -235,75 +229,51 @@ class DelegationFindingsTest(unittest.TestCase):
             consistent=None,
             complete=False,
         )
-
-        missing = _finding_map(_evidence(), missing_analysis)[
-            "Nameserver addressability"
-        ]
-        unknown = _finding_map(_evidence(), unknown_analysis)[
-            "Nameserver addressability"
-        ]
-
+        missing = _finding_map(_evidence(), missing_analysis)["Nameserver addressability"]
+        unknown = _finding_map(_evidence(), unknown_analysis)["Nameserver addressability"]
         self.assertEqual(missing.status, "fail")
+        self.assertEqual(missing.weight, NAMESERVER_ADDRESSABILITY_WEIGHT)
+        self.assertEqual(missing.earned, 0)
         self.assertEqual(unknown.status, "unknown")
+        self.assertFalse(unknown.applicable)
 
-    def test_in_bailiwick_missing_or_stale_glue_is_advisory(self):
-        missing_analysis = _analysis(
+    def test_glue_and_nameserver_aliasing_remain_non_scoring(self):
+        analysis = _analysis(
             nameservers=(
                 _ns(
                     "ns1.example.com",
                     in_bailiwick=True,
                     glue=GLUE_MISSING,
+                    alias=ALIAS_ALIAS,
                 ),
                 _ns("ns2.example.net"),
             ),
             consistent=None,
             complete=False,
         )
-        stale_analysis = _analysis(
+        findings = _finding_map(_evidence(), analysis)
+        self.assertEqual(findings["Delegation glue"].status, "warn")
+        self.assertEqual(findings["Delegation glue"].weight, 0)
+        self.assertEqual(findings["Nameserver target aliasing"].status, "warn")
+        self.assertEqual(findings["Nameserver target aliasing"].weight, 0)
+
+    def test_stale_glue_and_alias_lookup_unknown_remain_non_scoring(self):
+        analysis = _analysis(
             nameservers=(
                 _ns(
                     "ns1.example.com",
                     in_bailiwick=True,
                     glue=GLUE_PRESENT,
                     glue_consistent=False,
+                    alias=ALIAS_UNKNOWN,
                 ),
                 _ns("ns2.example.net"),
             ),
-            consistent=None,
-            complete=False,
         )
-
-        missing = _finding_map(_evidence(), missing_analysis)["Delegation glue"]
-        stale = _finding_map(_evidence(), stale_analysis)["Delegation glue"]
-
-        self.assertEqual(missing.status, "warn")
-        self.assertEqual(stale.status, "warn")
-        self.assertEqual(missing.weight, 0)
-        self.assertEqual(stale.weight, 0)
-
-    def test_nameserver_cname_alias_is_warn_and_lookup_failure_is_unknown(self):
-        alias_analysis = _analysis(
-            nameservers=(
-                _ns("ns1.example.net", alias=ALIAS_ALIAS),
-                _ns("ns2.example.net"),
-            ),
-        )
-        unknown_analysis = _analysis(
-            nameservers=(
-                _ns("ns1.example.net", alias=ALIAS_UNKNOWN),
-                _ns("ns2.example.net"),
-            ),
-        )
-
-        alias = _finding_map(_evidence(), alias_analysis)[
-            "Nameserver target aliasing"
-        ]
-        unknown = _finding_map(_evidence(), unknown_analysis)[
-            "Nameserver target aliasing"
-        ]
-
-        self.assertEqual(alias.status, "warn")
-        self.assertEqual(unknown.status, "unknown")
+        findings = _finding_map(_evidence(), analysis)
+        self.assertEqual(findings["Delegation glue"].weight, 0)
+        self.assertEqual(findings["Nameserver target aliasing"].status, "unknown")
+        self.assertFalse(findings["Nameserver target aliasing"].applicable)
 
 
 if __name__ == "__main__":

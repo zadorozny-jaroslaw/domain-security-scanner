@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .dns_scoring import OPEN_RECURSION_WEIGHT
 from .negative_dns import NegativeDnsEvidence
 from .negative_dns_analysis import (
     NegativeDnsAnalysis,
@@ -12,7 +13,7 @@ from .negative_dns_analysis import (
 
 @dataclass(frozen=True)
 class NegativeDnsFinding:
-    """One issue #19 finding; new score weight remains deferred to v1.3 calibration."""
+    """One customer-facing issue #19 finding."""
 
     name: str
     status: str
@@ -31,7 +32,7 @@ def _negative_behavior_finding(analysis: NegativeDnsAnalysis) -> NegativeDnsFind
         return NegativeDnsFinding(
             "Authoritative negative DNS",
             "pass",
-            "Wszystkie testowane serwery autorytatywne zwróciły spójne NXDOMAIN dla losowych, nieistniejących nazw wraz z użytecznym evidence odpowiedzi negatywnej.",
+            "Wszystkie testowane serwery autorytatywne zwróciły spójne NXDOMAIN dla losowych, nieistniejących nazw wraz z użytecznym materiałem odpowiedzi negatywnej.",
         )
 
     if analysis.negative_state == NegativeDnsState.NODATA:
@@ -86,6 +87,8 @@ def _recursion_finding(analysis: NegativeDnsAnalysis) -> NegativeDnsFinding:
             "Potwierdzono zewnętrznie dostępną rekurencję DNS na serwerach autorytatywnych: "
             + _names(analysis.recursion_open_servers)
             + ". Serwery zwróciły rozstrzygający wynik dla kontrolowanego zapytania poza ocenianą strefą.",
+            OPEN_RECURSION_WEIGHT,
+            0,
         )
 
     if analysis.recursion_state == RecursionState.CLOSED:
@@ -93,13 +96,15 @@ def _recursion_finding(analysis: NegativeDnsAnalysis) -> NegativeDnsFinding:
             "Authoritative open recursion",
             "pass",
             "Każdy testowany serwer autorytatywny jawnie odmówił kontrolowanego zapytania rekurencyjnego spoza strefy.",
+            OPEN_RECURSION_WEIGHT,
+            OPEN_RECURSION_WEIGHT,
         )
 
     details = []
     if analysis.recursion_closed_servers:
         details.append("jawna odmowa: " + _names(analysis.recursion_closed_servers))
     if analysis.recursion_unknown_servers:
-        details.append("brak rozstrzygającego evidence: " + _names(analysis.recursion_unknown_servers))
+        details.append("brak rozstrzygającego materiału: " + _names(analysis.recursion_unknown_servers))
     suffix = "; " + "; ".join(details) if details else ""
     return NegativeDnsFinding(
         "Authoritative open recursion",
@@ -107,7 +112,9 @@ def _recursion_finding(analysis: NegativeDnsAnalysis) -> NegativeDnsFinding:
         "Nie udało się wiarygodnie potwierdzić ani wykluczyć zewnętrznie dostępnej rekurencji"
         + suffix
         + ". Timeout lub same flagi DNS nie są traktowane jako dowód zamkniętej rekurencji.",
-        applicable=False,
+        OPEN_RECURSION_WEIGHT,
+        0,
+        False,
     )
 
 

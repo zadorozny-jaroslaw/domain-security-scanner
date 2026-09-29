@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ...models import DnsQueryState
 from .authoritative import AuthoritativeDnsEvidence
 from .authoritative_analysis import (
     EDNS_ANOMALY,
@@ -20,11 +21,12 @@ from .authoritative_analysis import (
     TRANSPORT_UDP_ONLY,
     AuthoritativeDnsAnalysis,
 )
+from .dns_scoring import AUTHORITATIVE_RRSET_WEIGHT, AUTHORITATIVE_TCP_WEIGHT
 
 
 @dataclass(frozen=True)
 class AuthoritativeDnsFinding:
-    """One non-scoring issue #15 Domain finding."""
+    """One issue #15 Domain finding."""
 
     name: str
     status: str
@@ -49,7 +51,32 @@ def _transport_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFi
             "Authoritative DNS transport",
             "unknown",
             "Brak bezpośrednich odpowiedzi z autorytatywnych endpointów; transport UDP/TCP nie może zostać oceniony.",
-            applicable=False,
+            AUTHORITATIVE_TCP_WEIGHT,
+            0,
+            False,
+        )
+
+    healthy_servers = {
+        endpoint.server_name
+        for endpoint in endpoints
+        if endpoint.status == TRANSPORT_BOTH_RESPOND
+    }
+    confirmed_tcp_failure = [
+        f"{endpoint.server_name} ({endpoint.server_ip})"
+        for endpoint in endpoints
+        if endpoint.status == TRANSPORT_UDP_ONLY
+        and endpoint.tcp_state in {DnsQueryState.TRANSPORT_ERROR, DnsQueryState.ERROR}
+        and any(name != endpoint.server_name for name in healthy_servers)
+    ]
+    if confirmed_tcp_failure:
+        return AuthoritativeDnsFinding(
+            "Authoritative DNS transport",
+            "warn",
+            "UDP działał, ale bezpośrednie połączenie TCP zakończyło się błędem transportu na części infrastruktury, podczas gdy inne serwery odpowiedziały poprawnie: "
+            + _names(confirmed_tcp_failure)
+            + ".",
+            AUTHORITATIVE_TCP_WEIGHT,
+            0,
         )
 
     asymmetric = [
@@ -73,8 +100,10 @@ def _transport_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFi
             "unknown",
             "Nie potwierdzono pełnej dostępności UDP/TCP dla wszystkich testowanych endpointów; "
             + "; ".join(details)
-            + ". Wynik wymaga weryfikacji z innej ścieżki sieciowej.",
-            applicable=False,
+            + ". Timeout lub brak odpowiedzi nie są automatycznie traktowane jako awaria serwera.",
+            AUTHORITATIVE_TCP_WEIGHT,
+            0,
+            False,
         )
 
     if all(endpoint.status == TRANSPORT_BOTH_RESPOND for endpoint in endpoints):
@@ -82,13 +111,17 @@ def _transport_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFi
             "Authoritative DNS transport",
             "pass",
             "Każdy testowany endpoint autorytatywny zwrócił odpowiedź zarówno przez UDP, jak i TCP.",
+            AUTHORITATIVE_TCP_WEIGHT,
+            AUTHORITATIVE_TCP_WEIGHT,
         )
 
     return AuthoritativeDnsFinding(
         "Authoritative DNS transport",
         "unknown",
         "Stan transportu UDP/TCP jest niejednoznaczny.",
-        applicable=False,
+        AUTHORITATIVE_TCP_WEIGHT,
+        0,
+        False,
     )
 
 
@@ -212,6 +245,8 @@ def _ns_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
             "Authoritative NS RRset consistency",
             "pass",
             "Testowane serwery autorytatywne zwróciły zgodny apex NS RRset.",
+            AUTHORITATIVE_RRSET_WEIGHT,
+            AUTHORITATIVE_RRSET_WEIGHT,
         )
     if analysis.ns_rrset_consistent is False:
         details = "; ".join(
@@ -225,12 +260,16 @@ def _ns_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFinding:
             "Zaobserwowano materialną różnicę apex NS RRset między serwerami autorytatywnymi"
             + suffix
             + ".",
+            AUTHORITATIVE_RRSET_WEIGHT,
+            0,
         )
     return AuthoritativeDnsFinding(
         "Authoritative NS RRset consistency",
         "unknown",
         "Brak kompletnego zestawu autorytatywnych odpowiedzi NS do porównania RRsetów.",
-        applicable=False,
+        AUTHORITATIVE_RRSET_WEIGHT,
+        0,
+        False,
     )
 
 
@@ -284,9 +323,7 @@ def build_authoritative_dns_findings(
     evidence: AuthoritativeDnsEvidence,
     analysis: AuthoritativeDnsAnalysis,
 ) -> tuple[AuthoritativeDnsFinding, ...]:
-    """Convert issue #15 analysis into conservative, non-scoring checks."""
-    # Keep evidence in the signature deliberately: later report/scoring work can
-    # use collection completeness without changing the findings API.
+    """Convert issue #15 analysis into conservative impact-calibrated checks."""
     _ = evidence
     return (
         _transport_finding(analysis),

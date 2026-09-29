@@ -6,6 +6,7 @@ from ...constants import COMMON_DNS_TYPES, TIMEOUT
 from ...utils import days_until, fallback_root_domain
 from .caa import collect_caa_policy
 from .delegation_findings import build_delegation_findings
+from .dns_scoring import CAA_MALFORMED_WEIGHT
 
 
 class DomainScanMixin:
@@ -223,6 +224,12 @@ class DomainScanMixin:
                 f"rekordy udało się bezpiecznie sparsować.",
                 3, 0, False
             )
+            self.add_check(
+                "Domain", "CAA policy syntax", "warn",
+                f"W efektywnym RRset CAA dla {effective_name} wykryto {len(syntax_errors)} "
+                "rekord(y) o nieprawidłowej składni. Polityka wymaga korekty i ponownej weryfikacji.",
+                CAA_MALFORMED_WEIGHT, 0
+            )
             return
 
         if analysis.get("fqdn_issuance_restricted"):
@@ -270,7 +277,7 @@ class DomainScanMixin:
                 f"W efektywnym RRset CAA wykryto {len(malformed_values)} nieprawidłowe "
                 "wartości rozpoznanych właściwości. Nieprawidłowe issue/issuewild są "
                 "traktowane przez RFC 8659 jak pusty issuer-domain-name.",
-                0, 0
+                CAA_MALFORMED_WEIGHT, 0
             )
 
         critical_unknown = analysis.get("critical_unknown_tags", [])
