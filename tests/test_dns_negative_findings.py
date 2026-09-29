@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from domain_security_scanner.domains.domain.dns_scoring import OPEN_RECURSION_WEIGHT
 from domain_security_scanner.domains.domain.negative_dns import (
     NegativeDnsEvidence,
     NegativeDnsServerEvidence,
@@ -132,7 +133,8 @@ class NegativeDnsFindingTests(unittest.TestCase):
         )
 
         self.assertEqual(recursion.status, "fail")
-        self.assertEqual(recursion.weight, 0)
+        self.assertEqual(recursion.weight, OPEN_RECURSION_WEIGHT)
+        self.assertEqual(recursion.earned, 0)
         self.assertTrue(recursion.applicable)
         self.assertIn("ns1.target.test", recursion.message)
 

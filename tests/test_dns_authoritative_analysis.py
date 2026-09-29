@@ -227,13 +227,13 @@ class AuthoritativeAnalysisTest(unittest.TestCase):
         findings = _findings(analysis, evidence)
         self.assertEqual(findings["Authoritative EDNS(0)"].status, "warn")
 
-    def test_empty_evidence_produces_unknown_non_scoring_findings(self):
+    def test_empty_evidence_produces_unknown_findings_excluded_from_score(self):
         evidence = AuthoritativeDnsEvidence(zone="example.com", servers=())
         analysis = analyze_authoritative_dns(evidence)
         findings = build_authoritative_dns_findings(evidence, analysis)
         self.assertEqual(len(findings), 6)
         self.assertTrue(all(item.status == "unknown" for item in findings))
-        self.assertTrue(all(item.weight == 0 for item in findings))
+        self.assertTrue(all(item.earned == 0 for item in findings))
         self.assertTrue(all(item.applicable is False for item in findings))
 
 

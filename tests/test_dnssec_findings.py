@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from domain_security_scanner.domains.domain.dns_scoring import DNSSEC_UNSIGNED_EARNED
 from domain_security_scanner.domains.domain.dnssec import DnssecEvidence
 from domain_security_scanner.domains.domain.dnssec_analysis import (
     DnssecAnalysis,
@@ -33,7 +34,8 @@ class DnssecFindingsTest(unittest.TestCase):
     def test_unsigned_is_scored_warn(self):
         finding = self._finding(DnssecState.UNSIGNED)
         self.assertEqual(finding.status, "warn")
-        self.assertEqual(finding.earned, 0)
+        self.assertEqual(finding.weight, DNSSEC_SCORE_WEIGHT)
+        self.assertEqual(finding.earned, DNSSEC_UNSIGNED_EARNED)
         self.assertTrue(finding.applicable)
         self.assertIn("nie używa DNSSEC", finding.message)
 
