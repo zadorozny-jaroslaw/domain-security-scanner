@@ -11,6 +11,7 @@ from .domains.domain.authoritative import AuthoritativeDnsScanMixin
 from .domains.domain.delegation import DelegationScanMixin
 from .domains.domain.dnssec import DnssecScanMixin, dnssec_report_data
 from .domains.domain.negative_dns import NegativeDnsScanMixin, negative_dns_report_data
+from .domains.domain.reporting import dns_infrastructure_report_data
 from .domains.mail import MailScanMixin
 from .domains.tls import TlsScanMixin
 from .domains.web import WebScanMixin
@@ -149,6 +150,13 @@ class Scanner(
             "emails": sorted(self.emails),
             "dns_records": self.dns_records,
             "dns": {
+                **dns_infrastructure_report_data(
+                    getattr(self, "delegation", None),
+                    getattr(self, "delegation_analysis", None),
+                    getattr(self, "authoritative_dns", None),
+                    getattr(self, "authoritative_dns_analysis", None),
+                    getattr(self, "caa", {}),
+                ),
                 "dnssec": dnssec_report_data(
                     getattr(self, "dnssec", None),
                     getattr(self, "dnssec_analysis", None),
