@@ -294,19 +294,130 @@ def _query_report(evidence: DnssecQueryEvidence | None) -> dict | None:
     }
 
 
+def _algorithm_observation_report(item) -> dict:
+    return {
+        "number": item.number,
+        "source": getattr(item, "source", None),
+        "description": item.description,
+        "mnemonic": getattr(item, "mnemonic", None),
+        "signing_posture": getattr(item, "signing_posture", None).value
+        if getattr(item, "signing_posture", None) is not None
+        else None,
+        "validation_posture": getattr(item, "validation_posture", None).value
+        if getattr(item, "validation_posture", None) is not None
+        else None,
+        "use_for_signing": getattr(item, "use_for_signing", None),
+        "use_for_validation": getattr(item, "use_for_validation", None),
+        "sha1_based": bool(getattr(item, "sha1_based", False)),
+        "retired": bool(getattr(item, "retired", False)),
+        "private_use": bool(getattr(item, "private_use", False)),
+    }
+
+
+def _digest_observation_report(item) -> dict:
+    return {
+        "number": item.number,
+        "description": item.description,
+        "delegation_posture": item.delegation_posture.value,
+        "validation_posture": item.validation_posture.value,
+        "use_for_delegation": item.use_for_delegation,
+        "use_for_validation": item.use_for_validation,
+        "sha1_based": item.sha1_based,
+        "retired": item.retired,
+        "private_use": item.private_use,
+    }
+
+
+def _algorithm_policy_report(analysis) -> dict:
+    if analysis is None:
+        return {
+            "status": "unknown",
+            "snapshot_version": None,
+            "algorithm_registry_updated": None,
+            "digest_registry_updated": None,
+            "dnskey_algorithms": [],
+            "ds_algorithms": [],
+            "ds_digests": [],
+        }
+    return {
+        "status": analysis.posture.value,
+        "reason": analysis.reason,
+        "snapshot_version": analysis.snapshot_version,
+        "algorithm_registry_updated": analysis.algorithm_registry_updated,
+        "digest_registry_updated": analysis.digest_registry_updated,
+        "dnskey_algorithms": [
+            _algorithm_observation_report(item) for item in analysis.dnskey_algorithms
+        ],
+        "ds_algorithms": [
+            _algorithm_observation_report(item) for item in analysis.ds_algorithms
+        ],
+        "ds_digests": [
+            _digest_observation_report(item) for item in analysis.ds_digests
+        ],
+        "sha1": {
+            "signing_algorithms": list(analysis.sha1_signing_algorithms),
+            "delegation_digests": list(analysis.sha1_delegation_digests),
+        },
+        "retired": {
+            "algorithms": list(analysis.retired_algorithms),
+            "digests": list(analysis.retired_digests),
+        },
+    }
+
+
+def _denial_report(analysis) -> dict:
+    if analysis is None:
+        return {
+            "mechanism": "unknown",
+            "posture": "unknown",
+            "observable": False,
+            "advisories": [],
+            "nsec3": None,
+        }
+    nsec3 = None
+    if analysis.nsec3 is not None:
+        nsec3 = {
+            "algorithms": list(analysis.nsec3.algorithms),
+            "flags": list(analysis.nsec3.flags),
+            "iterations": list(analysis.nsec3.iterations),
+            "salts": list(analysis.nsec3.salts),
+            "opt_out_observed": analysis.nsec3.opt_out_observed,
+            "reserved_flag_values": list(analysis.nsec3.reserved_flag_values),
+            "zero_iterations": analysis.nsec3.zero_iterations,
+            "empty_salt": analysis.nsec3.empty_salt,
+            "chain_parameters_consistent": analysis.nsec3.chain_parameters_consistent,
+        }
+    return {
+        "mechanism": analysis.mechanism.value,
+        "posture": analysis.posture.value,
+        "reason": analysis.reason,
+        "observable": analysis.observable,
+        "nsec_count": analysis.nsec_count,
+        "nsec3_count": analysis.nsec3_count,
+        "nsec3param_count": analysis.nsec3param_count,
+        "advisories": list(analysis.advisories),
+        "nsec3": nsec3,
+    }
+
+
 def dnssec_report_data(
     evidence: DnssecEvidence | None,
     analysis=None,
+    algorithm_analysis=None,
+    denial_analysis=None,
 ) -> dict:
     """Serialize bounded issue #16 evidence without claiming whole-zone validation."""
     if evidence is None or analysis is None:
         return {
             "status": "unknown",
             "policy_version": None,
+            "algorithm_policy": _algorithm_policy_report(algorithm_analysis),
+            "denial": _denial_report(denial_analysis),
             "scope": {
                 "validation_targets": ["DNSKEY", "SOA", "NS"],
                 "validated_rrsets": [],
                 "complete_zone_validation": False,
+                "denial_probe_limit": 1,
             },
         }
 
@@ -349,11 +460,18 @@ def dnssec_report_data(
         and getattr(step.outcome, "value", step.outcome) == "pass"
     ]
 
+    algorithm_policy = _algorithm_policy_report(algorithm_analysis)
+    denial = _denial_report(denial_analysis)
+
     return {
         "status": analysis.state.value,
         "reason": analysis.reason,
         "zone": evidence.zone,
+        # Kept for backward compatibility with issue #16. Issue #17 publishes
+        # the current IANA snapshot separately under algorithm_policy.
         "policy_version": analysis.policy_version,
+        "algorithm_policy": algorithm_policy,
+        "denial": denial,
         "ds": _rrset_rdata(parent_result, "DS"),
         "dnskeys": _rrset_rdata(dnskey_result, "DNSKEY"),
         "matching_key_tags": list(analysis.matched_key_tags),
@@ -366,6 +484,7 @@ def dnssec_report_data(
             "apex_rrsets": [
                 _query_report(item) for item in evidence.apex_rrsets
             ],
+            "denial_probe": _query_report(evidence.denial_probe),
         },
         "validation_steps": steps,
         "scope": {
@@ -374,6 +493,7 @@ def dnssec_report_data(
             "complete_zone_validation": False,
             "child_probe_limit": evidence.child_probe_limit,
             "child_probe_limit_reached": evidence.child_probe_limit_reached,
+            "denial_probe_limit": 1,
         },
     }
 
@@ -386,10 +506,15 @@ class DnssecScanMixin(DnssecEvidenceCollectorMixin):
         self.dnssec = self.collect_dnssec_evidence(delegation)
 
         from .dnssec_analysis import analyze_dnssec_evidence
+        from .dnssec_denial_analysis import analyze_dnssec_denial
+        from .dnssec_posture_analysis import analyze_dnssec_algorithm_posture
 
         self.dnssec_analysis = analyze_dnssec_evidence(self.dnssec)
+        self.dnssec_policy_analysis = analyze_dnssec_algorithm_posture(self.dnssec)
+        self.dnssec_denial_analysis = analyze_dnssec_denial(self.dnssec)
         result = super().collect_domain_dns()
         self._add_dnssec_findings()
+        self._add_dnssec_posture_findings()
         return result
 
     def _add_dnssec_findings(self):
@@ -401,6 +526,31 @@ class DnssecScanMixin(DnssecEvidenceCollectorMixin):
         from .dnssec_findings import build_dnssec_findings
 
         for finding in build_dnssec_findings(evidence, analysis):
+            self.add_check(
+                "Domain",
+                finding.name,
+                finding.status,
+                finding.message,
+                finding.weight,
+                finding.earned,
+                finding.applicable,
+            )
+
+    def _add_dnssec_posture_findings(self):
+        algorithm_analysis = getattr(self, "dnssec_policy_analysis", None)
+        denial_analysis = getattr(self, "dnssec_denial_analysis", None)
+        if (
+            algorithm_analysis is None
+            or denial_analysis is None
+            or not hasattr(self, "add_check")
+        ):
+            return
+
+        from .dnssec_posture_findings import build_dnssec_posture_findings
+
+        for finding in build_dnssec_posture_findings(
+            algorithm_analysis, denial_analysis
+        ):
             self.add_check(
                 "Domain",
                 finding.name,

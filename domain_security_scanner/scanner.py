@@ -57,6 +57,8 @@ class Scanner(
         self.negative_dns_analysis = None
         self.dnssec = None
         self.dnssec_analysis = None
+        self.dnssec_policy_analysis = None
+        self.dnssec_denial_analysis = None
 
         self.scan_groups = normalize_scan_groups(scan_groups)
         self.scan_selection = build_scan_selection_context(self.scan_groups)
@@ -150,6 +152,8 @@ class Scanner(
                 "dnssec": dnssec_report_data(
                     getattr(self, "dnssec", None),
                     getattr(self, "dnssec_analysis", None),
+                    getattr(self, "dnssec_policy_analysis", None),
+                    getattr(self, "dnssec_denial_analysis", None),
                 ),
                 **negative_dns_report_data(
                     getattr(self, "negative_dns", None),

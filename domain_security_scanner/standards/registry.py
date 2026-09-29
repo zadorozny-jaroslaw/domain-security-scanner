@@ -40,6 +40,7 @@ RFC_9110 = StandardReference("RFC9110", 9110, "HTTP Semantics", "https://www.rfc
 RFC_9111 = StandardReference("RFC9111", 9111, "HTTP Caching", "https://www.rfc-editor.org/info/rfc9111", "Web / HTTP cache policy and response caching metadata")
 RFC_9112 = StandardReference("RFC9112", 9112, "HTTP/1.1", "https://www.rfc-editor.org/info/rfc9112", "Web / passive HTTP/1.1 response framing metadata")
 RFC_9116 = StandardReference("RFC9116", 9116, "A File Format to Aid in Security Vulnerability Disclosure", "https://www.rfc-editor.org/info/rfc9116", "Web / security.txt")
+RFC_9276 = StandardReference("RFC9276", 9276, "Guidance for NSEC3 Parameter Settings", "https://www.rfc-editor.org/info/rfc9276", "DNSSEC / NSEC3 iteration, salt, and Opt-Out deployment guidance")
 RFC_9471 = StandardReference("RFC9471", 9471, "DNS Glue Requirements in Referral Responses", "https://www.rfc-editor.org/info/rfc9471", "DNS / glue requirements in referral responses")
 RFC_9904 = StandardReference("RFC9904", 9904, "DNSSEC Cryptographic Algorithm Recommendation Update Process", "https://www.rfc-editor.org/info/rfc9904", "DNSSEC / algorithm recommendation policy")
 RFC_9905 = StandardReference("RFC9905", 9905, "Deprecating RSASHA1 and RSASHA1-NSEC3-SHA1 in DNSSEC", "https://www.rfc-editor.org/info/rfc9905", "DNSSEC / validation policy for SHA-1 RSA algorithms")
@@ -54,7 +55,7 @@ STANDARD_REFERENCES: dict[str, StandardReference] = {
         RFC_4033, RFC_4034, RFC_4035,
         RFC_3986, RFC_6797, RFC_7505, RFC_7838, RFC_8288,
         RFC_8460, RFC_8461, RFC_8615, RFC_9110, RFC_9111,
-        RFC_9112, RFC_9116, RFC_9471, RFC_9904, RFC_9905,
+        RFC_9112, RFC_9116, RFC_9276, RFC_9471, RFC_9904, RFC_9905,
         RFC_9906, RFC_10025,
     )
 }

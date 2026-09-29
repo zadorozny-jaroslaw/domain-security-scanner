@@ -42,16 +42,21 @@ class _DnssecHarness(DnssecScanMixin, _TailMixin):
 
 
 class DnssecIntegrationTest(unittest.TestCase):
-    def test_mixin_collects_before_domain_and_emits_finding_afterwards(self):
+    def test_mixin_collects_before_domain_and_emits_findings_afterwards(self):
         harness = _DnssecHarness()
         result = harness.collect_domain_dns()
         self.assertEqual(result, "done")
         self.assertEqual(harness.events, ["dnssec", "domain"])
         self.assertEqual(harness.dnssec_analysis.state, DnssecState.UNKNOWN)
-        self.assertEqual(len(harness.checks), 1)
-        self.assertEqual(harness.checks[0][1], "DNSSEC")
-        self.assertEqual(harness.checks[0][2], "unknown")
-        self.assertFalse(harness.checks[0][-1])
+        self.assertEqual(harness.dnssec_policy_analysis.posture.value, "unknown")
+        self.assertEqual(harness.dnssec_denial_analysis.posture.value, "unknown")
+        self.assertEqual(len(harness.checks), 3)
+        self.assertEqual(
+            [item[1] for item in harness.checks],
+            ["DNSSEC", "DNSSEC algorithm policy", "DNSSEC denial of existence"],
+        )
+        self.assertTrue(all(item[2] == "unknown" for item in harness.checks))
+        self.assertTrue(all(item[-1] is False for item in harness.checks))
 
     def test_report_is_additive_structured_and_explicitly_bounded(self):
         ds = DnsQueryResult(
@@ -102,12 +107,16 @@ class DnssecIntegrationTest(unittest.TestCase):
         self.assertEqual(report["ds"], ["12345 13 2 AABBCCDD"])
         self.assertEqual(report["matching_key_tags"], [12345])
         self.assertTrue(report["queries"]["parent_ds"]["want_dnssec"])
+        self.assertIsNone(report["queries"]["denial_probe"])
+        self.assertEqual(report["algorithm_policy"]["status"], "unknown")
+        self.assertEqual(report["denial"]["posture"], "unknown")
         self.assertFalse(report["scope"]["complete_zone_validation"])
         self.assertEqual(
             report["scope"]["validation_targets"],
             ["DNSKEY", "SOA", "NS"],
         )
         self.assertEqual(report["scope"]["validated_rrsets"], ["DNSKEY"])
+        self.assertEqual(report["scope"]["denial_probe_limit"], 1)
 
     def test_unsigned_report_has_targets_but_no_validated_rrsets(self):
         analysis = DnssecAnalysis(
