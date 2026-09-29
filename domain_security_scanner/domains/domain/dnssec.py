@@ -45,6 +45,8 @@ class DnssecEvidence:
     apex_rrsets: tuple[DnssecQueryEvidence, ...] = ()
     child_probe_limit: int = MAX_DNSSEC_CHILD_ENDPOINT_PROBES
     child_probe_limit_reached: bool = False
+    # Appended for issue #17 to preserve the positional layout of issue #16.
+    denial_probe: DnssecQueryEvidence | None = None
 
 
 def _canonical_ip(value: str) -> str | None:
@@ -209,6 +211,7 @@ class DnssecEvidenceCollectorMixin:
                 break
 
         apex_rrsets: list[DnssecQueryEvidence] = []
+        denial_probe = None
         if selected_dnskey is not None:
             for qtype in DNSSEC_APEX_RRTYPES:
                 apex_rrsets.append(
@@ -220,12 +223,37 @@ class DnssecEvidenceCollectorMixin:
                     )
                 )
 
+            # Issue #17 reuses one high-entropy negative name already generated
+            # by issue #19 instead of creating a second random-name mechanism.
+            # The extra query is DNSSEC-aware (DO=1) and targets only the same
+            # selected authoritative endpoint used for DNSKEY/SOA/NS evidence.
+            # This keeps denial-of-existence collection bounded to one query.
+            if selected_dnskey.result.state == DnsQueryState.ANSWER:
+                negative_dns = getattr(self, "negative_dns", None)
+                negative_names = tuple(
+                    getattr(negative_dns, "negative_names", ()) or ()
+                )
+                if negative_names:
+                    candidate = normalize_dnssec_name(negative_names[0])
+                    if (
+                        candidate
+                        and candidate != zone
+                        and candidate.endswith("." + zone)
+                    ):
+                        denial_probe = self._dnssec_direct_query(
+                            candidate,
+                            "A",
+                            server_name=selected_dnskey.server_name,
+                            server_ip=selected_dnskey.server_ip,
+                        )
+
         return DnssecEvidence(
             zone=zone,
             parent_ds=parent_ds,
             dnskey_attempts=tuple(dnskey_attempts),
             selected_dnskey=selected_dnskey,
             apex_rrsets=tuple(apex_rrsets),
+            denial_probe=denial_probe,
             child_probe_limit=MAX_DNSSEC_CHILD_ENDPOINT_PROBES,
             child_probe_limit_reached=(
                 len(all_available) > MAX_DNSSEC_CHILD_ENDPOINT_PROBES
