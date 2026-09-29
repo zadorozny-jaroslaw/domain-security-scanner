@@ -23,6 +23,8 @@ RFC_1035 = StandardReference("RFC1035", 1035, "Domain names - implementation and
 RFC_1912 = StandardReference("RFC1912", 1912, "Common DNS Operational and Configuration Errors", "https://www.rfc-editor.org/info/rfc1912", "DNS / operational delegation and lame-server guidance")
 RFC_2181 = StandardReference("RFC2181", 2181, "Clarifications to the DNS Specification", "https://www.rfc-editor.org/info/rfc2181", "DNS / NS target canonical-name requirements")
 RFC_2182 = StandardReference("RFC2182", 2182, "Selection and Operation of Secondary DNS Servers", "https://www.rfc-editor.org/info/rfc2182", "DNS / authoritative-server redundancy and reachability")
+RFC_2308 = StandardReference("RFC2308", 2308, "Negative Caching of DNS Queries (DNS NCACHE)", "https://www.rfc-editor.org/info/rfc2308", "DNS / authoritative NXDOMAIN, NODATA, and negative SOA evidence")
+RFC_5358 = StandardReference("RFC5358", 5358, "Preventing Use of Recursive Nameservers in Reflector Attacks", "https://www.rfc-editor.org/info/rfc5358", "DNS / externally available recursive service and open-recursion hardening")
 RFC_4033 = StandardReference("RFC4033", 4033, "DNS Security Introduction and Requirements", "https://www.rfc-editor.org/info/rfc4033", "DNSSEC / validation model and resolver security states")
 RFC_4034 = StandardReference("RFC4034", 4034, "Resource Records for the DNS Security Extensions", "https://www.rfc-editor.org/info/rfc4034", "DNSSEC / DNSKEY, RRSIG, DS records and signature timing")
 RFC_4035 = StandardReference("RFC4035", 4035, "Protocol Modifications for the DNS Security Extensions", "https://www.rfc-editor.org/info/rfc4035", "DNSSEC / authenticated delegation and validation processing")
@@ -48,7 +50,7 @@ RFC_10025 = StandardReference("RFC10025", 10025, "Cookies: HTTP State Management
 STANDARD_REFERENCES: dict[str, StandardReference] = {
     ref.key: ref
     for ref in (
-        RFC_1034, RFC_1035, RFC_1912, RFC_2181, RFC_2182,
+        RFC_1034, RFC_1035, RFC_1912, RFC_2181, RFC_2182, RFC_2308, RFC_5358,
         RFC_4033, RFC_4034, RFC_4035,
         RFC_3986, RFC_6797, RFC_7505, RFC_7838, RFC_8288,
         RFC_8460, RFC_8461, RFC_8615, RFC_9110, RFC_9111,

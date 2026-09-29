@@ -10,6 +10,7 @@ from .domains.domain import DomainScanMixin
 from .domains.domain.authoritative import AuthoritativeDnsScanMixin
 from .domains.domain.delegation import DelegationScanMixin
 from .domains.domain.dnssec import DnssecScanMixin, dnssec_report_data
+from .domains.domain.negative_dns import NegativeDnsScanMixin, negative_dns_report_data
 from .domains.mail import MailScanMixin
 from .domains.tls import TlsScanMixin
 from .domains.web import WebScanMixin
@@ -27,6 +28,7 @@ class Scanner(
     DnsEvidenceMixin,
     DelegationScanMixin,
     AuthoritativeDnsScanMixin,
+    NegativeDnsScanMixin,
     DnssecScanMixin,
     DomainScanMixin,
     MailScanMixin,
@@ -51,6 +53,8 @@ class Scanner(
         self.delegation_analysis = None
         self.authoritative_dns = None
         self.authoritative_dns_analysis = None
+        self.negative_dns = None
+        self.negative_dns_analysis = None
         self.dnssec = None
         self.dnssec_analysis = None
 
@@ -147,12 +151,17 @@ class Scanner(
                     getattr(self, "dnssec", None),
                     getattr(self, "dnssec_analysis", None),
                 ),
+                **negative_dns_report_data(
+                    getattr(self, "negative_dns", None),
+                    getattr(self, "negative_dns_analysis", None),
+                ),
             },
             "limitations": [
                 "To jest zewnętrzny, niskoinwazyjny health check, a nie pełny pentest.",
                 "Brak wyniku DKIM dla popularnych selektorów nie oznacza braku DKIM.",
                 "Certificate Transparency jest historyczne; nazwa jest oznaczana jako historyczna tylko przy aktualnym NXDOMAIN, a błędy resolvera pozostają jako stan nieznany.",
                 "Walidacja DNSSEC jest ograniczona do parent DS, DNSKEY oraz wybranych apex RRsetów SOA/NS; wynik secure nie oznacza pełnej walidacji każdego RRsetu w strefie.",
+                "Obserwacje negative DNS, wildcard i open recursion są ograniczone do małej próbki z bieżącej lokalizacji skanera; timeout ani wynik niejednoznaczny nie potwierdzają wyłączenia rekurencji.",
                 "Dla .pl brak informacji o Registry Lock w RDAP nie oznacza, że blokady nie ma.",
                 "Wynik nie obejmuje bezpieczeństwa kont, MFA, endpointów, backupu, uprawnień ani konfiguracji wewnętrznej.",
                 "CMS/platforma jest wykrywana pasywnie. Brak detekcji nie oznacza braku CMS, a wersja jest raportowana tylko wtedy, gdy jest jawnie ujawniona.",

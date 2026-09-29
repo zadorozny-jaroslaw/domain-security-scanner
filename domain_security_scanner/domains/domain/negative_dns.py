@@ -183,6 +183,176 @@ class NegativeDnsEvidenceCollectorMixin:
         )
 
 
+def _query_report(
+    result: DnsQueryResult | None,
+    *,
+    include_qname: bool = True,
+) -> dict | None:
+    """Serialize one direct DNS observation without reinterpreting it."""
+    if result is None:
+        return None
+    data = {
+        "qtype": result.qtype,
+        "server_name": result.server_name,
+        "server_ip": result.server_ip,
+        "transport": result.transport.value if result.transport is not None else None,
+        "state": result.state.value,
+        "rcode": result.rcode,
+        "authoritative": result.aa,
+        "truncated": result.tc,
+        "request_recursion_desired": result.request_recursion_desired,
+        "response_recursion_desired": result.rd,
+        "recursion_available": result.ra,
+        "error": result.error,
+    }
+    if include_qname:
+        data["qname"] = result.qname
+    return data
+
+
+def negative_dns_report_data(evidence, analysis) -> dict:
+    """Return additive structured JSON evidence for issue #19."""
+    empty = {
+        "negative_response": {
+            "status": "unknown",
+            "complete": False,
+            "zone": None,
+            "query_type": NEGATIVE_DNS_QUERY_TYPE,
+            "probe_count": NEGATIVE_DNS_PROBE_COUNT,
+            "generated_probe_names_serialized": False,
+            "servers": [],
+        },
+        "wildcard": {
+            "status": "unknown",
+            "servers": [],
+        },
+        "open_recursion": {
+            "status": "unknown",
+            "probe_name": None,
+            "query_type": RECURSION_PROBE_QUERY_TYPE,
+            "probes_per_server": 1,
+            "amplification_measurement": False,
+            "open_servers": [],
+            "closed_servers": [],
+            "unknown_servers": [],
+            "servers": [],
+        },
+    }
+    if evidence is None or analysis is None:
+        return empty
+
+    negative_servers = []
+    recursion_servers = []
+    for raw_server, server_analysis in zip(evidence.servers, analysis.servers):
+        probes = []
+        for probe_index, (raw_result, probe_analysis) in enumerate(
+            zip(raw_server.negative_results, server_analysis.probes),
+            start=1,
+        ):
+            probes.append(
+                {
+                    "probe_index": probe_index,
+                    "outcome": probe_analysis.outcome.value,
+                    "rcode": probe_analysis.rcode,
+                    "authoritative": probe_analysis.authoritative,
+                    "answer_records": list(raw_result.records),
+                    "soa_records": list(probe_analysis.soa_records),
+                    "query": _query_report(raw_result, include_qname=False),
+                }
+            )
+        negative_servers.append(
+            {
+                "server_name": server_analysis.server_name,
+                "server_ip": server_analysis.server_ip,
+                "status": server_analysis.negative_state.value,
+                "complete": server_analysis.negative_complete,
+                "wildcard_answer_sets_equal": server_analysis.wildcard_answer_sets_equal,
+                "probes": probes,
+            }
+        )
+        recursion_servers.append(
+            {
+                "server_name": server_analysis.server_name,
+                "server_ip": server_analysis.server_ip,
+                "status": server_analysis.recursion_state.value,
+                "reason": server_analysis.recursion_reason,
+                "query": _query_report(raw_server.recursion_result),
+            }
+        )
+
+    if analysis.wildcard_servers:
+        wildcard_status = "observed"
+    elif analysis.negative_complete:
+        wildcard_status = "not_observed"
+    else:
+        wildcard_status = "unknown"
+
+    return {
+        "negative_response": {
+            "status": analysis.negative_state.value,
+            "complete": analysis.negative_complete,
+            "zone": evidence.zone,
+            "query_type": evidence.negative_query_type,
+            "probe_count": evidence.negative_probe_count,
+            "generated_probe_names_serialized": False,
+            "servers": negative_servers,
+        },
+        "wildcard": {
+            "status": wildcard_status,
+            "servers": list(analysis.wildcard_servers),
+        },
+        "open_recursion": {
+            "status": analysis.recursion_state.value,
+            "probe_name": evidence.recursion_probe_name,
+            "query_type": evidence.recursion_query_type,
+            "probes_per_server": 1,
+            "amplification_measurement": False,
+            "open_servers": list(analysis.recursion_open_servers),
+            "closed_servers": list(analysis.recursion_closed_servers),
+            "unknown_servers": list(analysis.recursion_unknown_servers),
+            "servers": recursion_servers,
+        },
+    }
+
+
+class NegativeDnsScanMixin(NegativeDnsEvidenceCollectorMixin):
+    """Collect, analyze, report, and emit issue #19 DNS findings."""
+
+    def collect_domain_dns(self):
+        authoritative_dns = getattr(self, "authoritative_dns", None)
+        self.negative_dns = self.collect_negative_dns_evidence(authoritative_dns)
+
+        if self.negative_dns is None:
+            self.negative_dns_analysis = None
+        else:
+            from .negative_dns_analysis import analyze_negative_dns
+
+            self.negative_dns_analysis = analyze_negative_dns(self.negative_dns)
+
+        result = super().collect_domain_dns()
+        self._add_negative_dns_findings()
+        return result
+
+    def _add_negative_dns_findings(self):
+        evidence = getattr(self, "negative_dns", None)
+        analysis = getattr(self, "negative_dns_analysis", None)
+        if evidence is None or analysis is None or not hasattr(self, "add_check"):
+            return
+
+        from .negative_dns_findings import build_negative_dns_findings
+
+        for finding in build_negative_dns_findings(evidence, analysis):
+            self.add_check(
+                "Domain",
+                finding.name,
+                finding.status,
+                finding.message,
+                finding.weight,
+                finding.earned,
+                finding.applicable,
+            )
+
+
 __all__ = [
     "NEGATIVE_DNS_DIRECT_TIMEOUT",
     "NEGATIVE_DNS_QUERY_TYPE",
@@ -191,5 +361,7 @@ __all__ = [
     "RECURSION_PROBE_CANDIDATES",
     "NegativeDnsEvidence",
     "NegativeDnsEvidenceCollectorMixin",
+    "NegativeDnsScanMixin",
     "NegativeDnsServerEvidence",
+    "negative_dns_report_data",
 ]

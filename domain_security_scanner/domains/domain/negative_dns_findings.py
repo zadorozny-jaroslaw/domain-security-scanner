@@ -12,7 +12,7 @@ from .negative_dns_analysis import (
 
 @dataclass(frozen=True)
 class NegativeDnsFinding:
-    """One issue #19 finding; scoring is intentionally deferred to integration."""
+    """One issue #19 finding; new score weight remains deferred to v1.3 calibration."""
 
     name: str
     status: str
