@@ -41,6 +41,7 @@ class DnsEvidenceMixin:
         edns_version: int | None = None,
         edns_payload: int | None = None,
         want_dnssec: bool = False,
+        recursion_desired: bool = False,
     ) -> DnsQueryCacheKey:
         """Build a normalized cache key for one DNS query context."""
         return DnsQueryCacheKey.build(
@@ -53,6 +54,7 @@ class DnsEvidenceMixin:
             edns_version=edns_version,
             edns_payload=edns_payload,
             want_dnssec=want_dnssec,
+            recursion_desired=recursion_desired,
         )
 
     @classmethod
@@ -80,6 +82,7 @@ class DnsEvidenceMixin:
         edns_version: int | None = None,
         edns_payload: int | None = None,
         want_dnssec: bool = False,
+        recursion_desired: bool = False,
     ) -> DnsQueryCacheKey:
         """Return a context-complete authoritative DNS cache key."""
         return cls._dns_cache_key(
@@ -92,6 +95,7 @@ class DnsEvidenceMixin:
             edns_version=edns_version,
             edns_payload=edns_payload,
             want_dnssec=want_dnssec,
+            recursion_desired=recursion_desired,
         )
 
     def dns_cached_result(
@@ -115,6 +119,7 @@ class DnsEvidenceMixin:
         edns_version: int | None = None,
         edns_payload: int | None = None,
         want_dnssec: bool = False,
+        recursion_desired: bool = False,
     ) -> DnsQueryResult | None:
         """Return cached evidence for one authoritative query profile."""
         return self.dns_query_cache.get(
@@ -127,6 +132,7 @@ class DnsEvidenceMixin:
                 edns_version=edns_version,
                 edns_payload=edns_payload,
                 want_dnssec=want_dnssec,
+                recursion_desired=recursion_desired,
             )
         )
 
@@ -237,7 +243,12 @@ class DnsEvidenceMixin:
         )
 
     @classmethod
-    def _authoritative_state(cls, response) -> DnsQueryState:
+    def _authoritative_state(
+        cls,
+        response,
+        *,
+        require_authoritative: bool = True,
+    ) -> DnsQueryState:
         """Map a direct DNS response into the scanner evidence state model."""
         if response.flags & dns.flags.TC:
             # A truncated response is incomplete evidence. In particular, an
@@ -252,8 +263,10 @@ class DnsEvidenceMixin:
         # the target server actually sets AA. An AA=0 response can be a referral,
         # cache/intermediary response, or evidence that this server is not
         # authoritative for the queried name; it must never become record absence.
-        if rcode in {dns.rcode.NOERROR, dns.rcode.NXDOMAIN} and not (
-            response.flags & dns.flags.AA
+        if (
+            require_authoritative
+            and rcode in {dns.rcode.NOERROR, dns.rcode.NXDOMAIN}
+            and not (response.flags & dns.flags.AA)
         ):
             return DnsQueryState.NOT_AUTHORITATIVE
 
@@ -287,13 +300,16 @@ class DnsEvidenceMixin:
         edns_version: int | None = None,
         edns_payload: int | None = None,
         want_dnssec: bool = False,
+        recursion_desired: bool = False,
     ) -> DnsQueryResult:
         """Query one DNS server directly over an explicit transport/profile.
 
         ``edns_version=None`` sends an ordinary DNS query without EDNS. Passing
         ``edns_version=0`` with a bounded payload creates a distinct EDNS(0)
         observation. ``want_dnssec=True`` requests DNSSEC records using the DO
-        bit and is also part of the cache identity.
+        bit and is also part of the cache identity. ``recursion_desired=True``
+        sets RD for the controlled issue #19 open-recursion observation; normal
+        authoritative queries continue to clear RD.
 
         The result represents evidence about exactly this server address and
         transport. A timeout, truncated response, transport error, SERVFAIL, or
@@ -308,6 +324,7 @@ class DnsEvidenceMixin:
             edns_version=edns_version,
             edns_payload=edns_payload,
             want_dnssec=want_dnssec,
+            recursion_desired=recursion_desired,
         )
         cached = self.dns_query_cache.get(cache_key)
         if cached is not None:
@@ -331,7 +348,10 @@ class DnsEvidenceMixin:
                 payload=cache_key.edns_payload,
                 request_payload=cache_key.edns_payload,
             )
-            query.flags &= ~dns.flags.RD
+            if cache_key.recursion_desired:
+                query.flags |= dns.flags.RD
+            else:
+                query.flags &= ~dns.flags.RD
 
             if transport_value == DnsTransport.UDP:
                 response = dns.query.udp(
@@ -347,7 +367,10 @@ class DnsEvidenceMixin:
                     timeout=timeout,
                 )
 
-            state = self._authoritative_state(response)
+            state = self._authoritative_state(
+                response,
+                require_authoritative=not cache_key.recursion_desired,
+            )
             if state == DnsQueryState.TRUNCATED:
                 error = "DNS response was truncated; retry explicitly over TCP"
             elif state == DnsQueryState.NOT_AUTHORITATIVE:
@@ -387,6 +410,7 @@ class DnsEvidenceMixin:
             request_edns_version=cache_key.edns_version,
             request_edns_payload=cache_key.edns_payload,
             request_want_dnssec=cache_key.want_dnssec,
+            request_recursion_desired=cache_key.recursion_desired,
             elapsed_ms=elapsed_ms,
         )
 
@@ -413,6 +437,8 @@ class DnsEvidenceMixin:
                 answer_section=self._dns_section_text(response.answer),
                 authority_section=self._dns_section_text(response.authority),
                 additional_section=self._dns_section_text(response.additional),
+                rd=bool(response.flags & dns.flags.RD),
+                ra=bool(response.flags & dns.flags.RA),
                 **common,
             )
 

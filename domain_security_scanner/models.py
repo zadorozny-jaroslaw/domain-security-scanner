@@ -65,6 +65,7 @@ class DnsQueryCacheKey:
     edns_version: int | None = None
     edns_payload: int | None = None
     want_dnssec: bool = False
+    recursion_desired: bool = False
 
     @classmethod
     def build(
@@ -79,6 +80,7 @@ class DnsQueryCacheKey:
         edns_version: int | None = None,
         edns_payload: int | None = None,
         want_dnssec: bool = False,
+        recursion_desired: bool = False,
     ) -> "DnsQueryCacheKey":
         """Normalize DNS query context into a stable cache key."""
         normalized_server_name = (
@@ -94,6 +96,8 @@ class DnsQueryCacheKey:
 
         if not isinstance(want_dnssec, bool):
             raise TypeError("DNSSEC request flag must be a boolean.")
+        if not isinstance(recursion_desired, bool):
+            raise TypeError("Recursion-desired request flag must be a boolean.")
 
         # dnspython enables EDNS(0) automatically when want_dnssec=True because
         # the DNSSEC OK bit lives in the EDNS flags. Normalize the cache profile
@@ -128,6 +132,7 @@ class DnsQueryCacheKey:
             edns_version=edns_version,
             edns_payload=edns_payload,
             want_dnssec=want_dnssec,
+            recursion_desired=recursion_desired,
         )
 
 
@@ -165,6 +170,12 @@ class DnsQueryResult:
     request_edns_payload: int | None = None
     request_want_dnssec: bool = False
 
+    # Issue #19 appends recursion request/response metadata without changing the
+    # positional layout of any pre-existing fields.
+    request_recursion_desired: bool = False
+    rd: bool | None = None
+    ra: bool | None = None
+
     @property
     def qname(self) -> str:
         """Standards-oriented alias retained alongside the legacy host field."""
@@ -189,6 +200,11 @@ class DnsQueryResult:
     def truncated(self) -> bool | None:
         """Descriptive alias for the DNS TC flag."""
         return self.tc
+
+    @property
+    def recursion_available(self) -> bool | None:
+        """Descriptive alias for the DNS RA response flag."""
+        return self.ra
 
     @property
     def failed(self) -> bool:
