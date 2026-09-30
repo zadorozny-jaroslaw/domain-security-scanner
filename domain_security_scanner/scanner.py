@@ -10,6 +10,10 @@ from .domains.domain import DomainScanMixin
 from .domains.domain.authoritative import AuthoritativeDnsScanMixin
 from .domains.domain.delegation import DelegationScanMixin
 from .domains.domain.dnssec import DnssecScanMixin, dnssec_report_data
+from .domains.domain.encrypted_dns import (
+    EncryptedDnsScanMixin,
+    encrypted_dns_report_data,
+)
 from .domains.domain.negative_dns import NegativeDnsScanMixin, negative_dns_report_data
 from .domains.domain.reporting import dns_infrastructure_report_data
 from .domains.mail import MailScanMixin
@@ -29,6 +33,7 @@ class Scanner(
     DnsEvidenceMixin,
     DelegationScanMixin,
     AuthoritativeDnsScanMixin,
+    EncryptedDnsScanMixin,
     NegativeDnsScanMixin,
     DnssecScanMixin,
     DomainScanMixin,
@@ -54,6 +59,7 @@ class Scanner(
         self.delegation_analysis = None
         self.authoritative_dns = None
         self.authoritative_dns_analysis = None
+        self.encrypted_dns = None
         self.negative_dns = None
         self.negative_dns_analysis = None
         self.dnssec = None
@@ -156,6 +162,9 @@ class Scanner(
                     getattr(self, "authoritative_dns", None),
                     getattr(self, "authoritative_dns_analysis", None),
                     getattr(self, "caa", {}),
+                ),
+                "encrypted_recursive": encrypted_dns_report_data(
+                    getattr(self, "encrypted_dns", None)
                 ),
                 "dnssec": dnssec_report_data(
                     getattr(self, "dnssec", None),

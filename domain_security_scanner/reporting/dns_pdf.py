@@ -211,6 +211,14 @@ def _delegation_authority_row(
         )
         secondary_statuses.append(authoritative_ns["status"])
 
+    encrypted = dns.get("encrypted_recursive") or {}
+    encrypted_status = str(encrypted.get("status") or "not_needed").lower()
+    if encrypted_status == "usable":
+        clauses.append("Encrypted DNS: OK (SOA/NS consensus over HTTPS)")
+    elif encrypted.get("attempted"):
+        clauses.append("Encrypted DNS: VERIFY")
+        secondary_statuses.append("unknown")
+
     target_name = _normalized_dns_name(
         report.get("target_domain") or report.get("root_domain")
     )
