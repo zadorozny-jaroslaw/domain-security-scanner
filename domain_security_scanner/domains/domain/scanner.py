@@ -176,7 +176,11 @@ class DomainScanMixin:
         if evidence is None or analysis is None:
             return
 
-        for finding in build_delegation_findings(evidence, analysis):
+        for finding in build_delegation_findings(
+            evidence,
+            analysis,
+            getattr(self, "authoritative_dns_analysis", None),
+        ):
             self.add_check(
                 "Domain",
                 finding.name,

@@ -19,6 +19,7 @@ from .delegation_analysis import (
     GLUE_PRESENT,
     DelegationAnalysis,
 )
+from .dns_reconciliation import reconcile_delegation
 from .dns_scoring import (
     DELEGATED_AUTHORITY_WEIGHT,
     DELEGATION_CONSISTENCY_WEIGHT,
@@ -57,6 +58,7 @@ def _by_authority_status(
 def build_delegation_findings(
     evidence: ParentDelegationEvidence,
     analysis: DelegationAnalysis,
+    authoritative_analysis=None,
 ) -> tuple[DelegationFinding, ...]:
     """Convert delegation analysis into impact-calibrated Domain checks.
 
@@ -65,6 +67,8 @@ def build_delegation_findings(
     ``applicable=False``.
     """
     findings: list[DelegationFinding] = []
+
+    reconciled = reconcile_delegation(analysis, authoritative_analysis)
 
     if not evidence.available or not analysis.parent_nameservers:
         findings.append(
@@ -109,31 +113,35 @@ def build_delegation_findings(
                 False,
             )
         )
-    elif analysis.parent_child_consistent is True:
+    elif reconciled.consistent is True:
         findings.append(
             DelegationFinding(
                 "DNS delegation consistency",
                 "pass",
-                "Delegacja rodzica jest zgodna z potwierdzonymi autorytatywnymi zestawami NS strefy.",
+                (
+                    "Delegacja rodzica jest zgodna z potwierdzonymi autorytatywnymi zestawami NS strefy."
+                    if reconciled.consistency_source == "delegation_probe"
+                    else "Delegacja rodzica jest zgodna z później potwierdzonymi autorytatywnymi apex NS RRsetami wszystkich delegowanych serwerów."
+                ),
                 DELEGATION_CONSISTENCY_WEIGHT,
                 DELEGATION_CONSISTENCY_WEIGHT,
             )
         )
-    elif analysis.parent_child_consistent is False:
+    elif reconciled.consistent is False:
         details: list[str] = []
-        if analysis.missing_from_child:
+        if reconciled.missing_from_child:
             details.append(
-                "brak po stronie dziecka: " + _names(analysis.missing_from_child)
+                "brak po stronie dziecka: " + _names(reconciled.missing_from_child)
             )
-        if analysis.extra_in_child:
+        if reconciled.extra_in_child:
             details.append(
-                "tylko po stronie dziecka: " + _names(analysis.extra_in_child)
+                "tylko po stronie dziecka: " + _names(reconciled.extra_in_child)
             )
         suffix = "; ".join(details)
         if suffix:
             suffix = " " + suffix + "."
 
-        if analysis.parent_child_complete:
+        if reconciled.complete:
             findings.append(
                 DelegationFinding(
                     "DNS delegation consistency",
@@ -227,18 +235,39 @@ def build_delegation_findings(
                 )
             )
         elif unknown:
-            findings.append(
-                DelegationFinding(
-                    "Delegated nameserver authority",
-                    "unknown",
-                    "Nie udało się potwierdzić autorytatywności wszystkich delegowanych NS; niepełne dowody dotyczą: "
-                    + _names(unknown)
-                    + ".",
-                    DELEGATED_AUTHORITY_WEIGHT,
-                    0,
-                    False,
+            confirmed = set(reconciled.authority_confirmed_servers)
+            expected = {
+                str(item.name).strip().lower().rstrip(".")
+                for item in analysis.nameservers
+            }
+            originally_authoritative = {
+                str(item.name).strip().lower().rstrip(".")
+                for item in analysis.nameservers
+                if item.authority_status == AUTHORITY_AUTHORITATIVE
+            }
+            if expected and expected <= (confirmed | originally_authoritative):
+                findings.append(
+                    DelegationFinding(
+                        "Delegated nameserver authority",
+                        "pass",
+                        "Każdy delegowany serwer NS został potwierdzony autorytatywnie przez bezpośredni apex NS RRset z AA=1; późniejszy materiał uzupełnił niejednoznaczne wcześniejsze próby delegacyjne.",
+                        DELEGATED_AUTHORITY_WEIGHT,
+                        DELEGATED_AUTHORITY_WEIGHT,
+                    )
                 )
-            )
+            else:
+                findings.append(
+                    DelegationFinding(
+                        "Delegated nameserver authority",
+                        "unknown",
+                        "Nie udało się potwierdzić autorytatywności wszystkich delegowanych NS; niepełne dowody dotyczą: "
+                        + _names(unknown)
+                        + ".",
+                        DELEGATED_AUTHORITY_WEIGHT,
+                        0,
+                        False,
+                    )
+                )
         elif all(
             item.authority_status == AUTHORITY_AUTHORITATIVE
             for item in analysis.nameservers

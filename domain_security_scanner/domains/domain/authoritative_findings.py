@@ -151,18 +151,22 @@ def _soa_authority_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeD
             + _names(not_authoritative)
             + ".",
         )
-    if no_soa or mixed:
-        details = []
-        if no_soa:
-            details.append("brak potwierdzonego SOA: " + _names(no_soa))
-        if mixed:
-            details.append("mieszane wyniki między endpointami/transportami: " + _names(mixed))
+    if no_soa:
+        return AuthoritativeDnsFinding(
+            "Authoritative SOA service",
+            "unknown",
+            "Bezpośrednie odpowiedzi DNS z delegowanych NS nie dostarczyły użytecznego apex SOA dla: "
+            + _names(no_soa)
+            + ". Sam brak użytecznego RRsetu w tej ścieżce pomiarowej nie jest traktowany jako potwierdzona awaria usługi SOA.",
+            applicable=False,
+        )
+    if mixed:
         return AuthoritativeDnsFinding(
             "Authoritative SOA service",
             "warn",
-            "Nie wszystkie odpowiedzi delegowanych NS potwierdzają spójne autorytatywne SOA; "
-            + "; ".join(details)
-            + ".",
+            "Zaobserwowano mieszane wyniki SOA między endpointami/transportami delegowanych NS: "
+            + _names(mixed)
+            + ". Co najmniej jedna ścieżka potwierdziła autorytatywne SOA, ale zachowanie nie było spójne.",
         )
     if unknown:
         return AuthoritativeDnsFinding(

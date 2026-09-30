@@ -649,7 +649,12 @@ class DnssecScanMixin(DnssecEvidenceCollectorMixin):
 
         from .dnssec_findings import build_dnssec_findings
 
-        for finding in build_dnssec_findings(evidence, analysis):
+        for finding in build_dnssec_findings(
+            evidence,
+            analysis,
+            rdap=getattr(self, "rdap", None),
+            dns_records=getattr(self, "dns_records", None),
+        ):
             self.add_check(
                 "Domain",
                 finding.name,

@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .dns_reconciliation import reconcile_delegation
+
 
 def _enum_value(value: Any) -> Any:
     """Return a stable serialized value for Enum/StrEnum-like objects."""
@@ -57,28 +59,31 @@ def _soa_observation_report(observation: Any) -> dict[str, Any] | None:
     }
 
 
-def delegation_report_data(evidence: Any, analysis: Any) -> dict[str, Any]:
+def delegation_report_data(
+    evidence: Any,
+    analysis: Any,
+    authoritative_analysis: Any = None,
+) -> dict[str, Any]:
     """Return additive parent/child delegation evidence for the public report."""
+    reconciled = reconcile_delegation(analysis, authoritative_analysis)
     parent_ns = list(
         getattr(analysis, "parent_nameservers", ())
         if analysis is not None
         else getattr(evidence, "delegated_nameservers", ()) if evidence is not None else ()
     )
-    child_ns = list(
-        getattr(analysis, "observed_child_nameservers", ())
-        if analysis is not None
-        else ()
-    )
+    child_ns = list(reconciled.child_nameservers)
+    confirmed_authority = set(reconciled.authority_confirmed_servers)
 
     analysis_by_name = {
-        getattr(item, "name", ""): item
+        str(getattr(item, "name", "")).strip().lower().rstrip("."): item
         for item in (getattr(analysis, "nameservers", ()) or ())
         if getattr(item, "name", "")
     }
 
     nameservers: list[dict[str, Any]] = []
     for server in getattr(evidence, "delegated_servers", ()) or ():
-        item = analysis_by_name.get(getattr(server, "name", ""))
+        server_name_key = str(getattr(server, "name", "")).strip().lower().rstrip(".")
+        item = analysis_by_name.get(server_name_key)
         addresses = getattr(server, "addresses", None)
         glue = getattr(server, "glue", None)
         nameservers.append(
@@ -86,7 +91,18 @@ def delegation_report_data(evidence: Any, analysis: Any) -> dict[str, Any]:
                 "name": getattr(server, "name", None),
                 "in_bailiwick": getattr(item, "in_bailiwick", None),
                 "address_status": getattr(item, "address_status", "unknown"),
-                "authority_status": getattr(item, "authority_status", "unknown"),
+                "authority_status": (
+                    "authoritative"
+                    if server_name_key in confirmed_authority
+                    and getattr(item, "authority_status", "unknown")
+                    in {"unknown", "no_address", "unprobed"}
+                    else getattr(item, "authority_status", "unknown")
+                ),
+                "authority_source": (
+                    "authoritative_apex_ns"
+                    if server_name_key in confirmed_authority
+                    else "delegation_probe"
+                ),
                 "alias_status": getattr(item, "alias_status", "unknown"),
                 "alias_targets": list(getattr(item, "alias_targets", ()) or ()),
                 "glue_status": getattr(item, "glue_status", "unknown"),
@@ -136,19 +152,11 @@ def delegation_report_data(evidence: Any, analysis: Any) -> dict[str, Any]:
         "available": bool(getattr(evidence, "available", False)) if evidence is not None else False,
         "parent_ns": parent_ns,
         "child_ns": child_ns,
-        "consistent": (
-            getattr(analysis, "parent_child_consistent", None)
-            if analysis is not None
-            else None
-        ),
-        "complete": bool(getattr(analysis, "parent_child_complete", False))
-        if analysis is not None
-        else False,
-        "missing_from_child": list(
-            getattr(analysis, "missing_from_child", ()) or ()
-        ) if analysis is not None else [],
-        "extra_in_child": list(getattr(analysis, "extra_in_child", ()) or ())
-        if analysis is not None else [],
+        "consistent": reconciled.consistent,
+        "complete": reconciled.complete,
+        "consistency_source": reconciled.consistency_source,
+        "missing_from_child": list(reconciled.missing_from_child),
+        "extra_in_child": list(reconciled.extra_in_child),
         "glue": glue,
         "source": {
             "server_name": getattr(evidence, "source_server_name", None)
@@ -321,7 +329,11 @@ def dns_infrastructure_report_data(
         authoritative_dns_analysis,
     )
     return {
-        "delegation": delegation_report_data(delegation, delegation_analysis),
+        "delegation": delegation_report_data(
+            delegation,
+            delegation_analysis,
+            authoritative_dns_analysis,
+        ),
         "authoritative_servers": authoritative_servers,
         "soa": soa,
         "caa": caa_report_data(caa),

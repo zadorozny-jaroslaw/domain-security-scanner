@@ -19,9 +19,21 @@ class DnssecFinding:
     applicable: bool = True
 
 
+def _signed_context(rdap, dns_records, zone: str) -> tuple[bool, bool]:
+    rdap = rdap if isinstance(rdap, dict) else {}
+    secure_dns = rdap.get("secureDNS") if isinstance(rdap.get("secureDNS"), dict) else {}
+    rdap_signed = secure_dns.get("delegationSigned") is True
+    zone_records = (dns_records or {}).get(zone, {}) if isinstance(dns_records, dict) else {}
+    recursive_ds = bool(zone_records.get("DS")) if isinstance(zone_records, dict) else False
+    return rdap_signed, recursive_ds
+
+
 def build_dnssec_findings(
     evidence: DnssecEvidence,
     analysis: DnssecAnalysis,
+    *,
+    rdap=None,
+    dns_records=None,
 ) -> tuple[DnssecFinding, ...]:
     """Convert DNSSEC state into one impact-calibrated scored check.
 
@@ -62,12 +74,42 @@ def build_dnssec_findings(
             0,
         )
     else:
+        rdap_signed, recursive_ds = _signed_context(rdap, dns_records, zone)
+        selected = getattr(evidence, "selected_dnskey", None)
+        selected_result = getattr(selected, "result", None)
+        selected_state = getattr(selected_result, "state", None)
+        selected_state = getattr(selected_state, "value", selected_state)
+        child_dnskey = bool(
+            selected_result is not None
+            and selected_state == "answer"
+            and getattr(selected_result, "aa", None) is True
+        )
+
+        context_parts = []
+        if rdap_signed:
+            context_parts.append("RDAP wskazuje podpisaną delegację")
+        if recursive_ds:
+            context_parts.append("rekurencyjny inventory widzi rekord DS")
+        if child_dnskey:
+            context_parts.append("bezpośrednio zaobserwowano autorytatywny DNSKEY dziecka")
+
+        if context_parts:
+            message = (
+                f"DNSSEC dla {zone} ma oznaki aktywnego podpisania ({'; '.join(context_parts)}), "
+                "ale z bieżącej lokalizacji skanera nie udało się domknąć bezpośredniej "
+                "walidacji parent-to-child. Wynik pozostaje VERIFY i nie wpływa na scoring."
+            )
+        else:
+            message = (
+                f"Nie można jednoznacznie zweryfikować DNSSEC dla {zone}: wymagane dowody "
+                "są niedostępne, niekompletne lub lokalna walidacja kryptograficzna nie "
+                "była możliwa."
+            )
+
         primary = DnssecFinding(
             "DNSSEC",
             "unknown",
-            f"Nie można jednoznacznie zweryfikować DNSSEC dla {zone}: wymagane dowody "
-            "są niedostępne, niekompletne lub lokalna walidacja kryptograficzna nie "
-            "była możliwa.",
+            message,
             DNSSEC_SCORE_WEIGHT,
             0,
             False,

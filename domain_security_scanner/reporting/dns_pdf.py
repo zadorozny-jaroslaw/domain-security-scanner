@@ -16,7 +16,7 @@ def status_label(status: str) -> str:
     return _STATUS_LABELS.get(str(status or "unknown").lower(), "VERIFY")
 
 
-def _dnssec_row(dns: dict[str, Any]) -> dict[str, str]:
+def _dnssec_row(report: dict[str, Any], dns: dict[str, Any]) -> dict[str, str]:
     state = str((dns.get("dnssec") or {}).get("status") or "unknown").lower()
     if state == "secure":
         return {
@@ -36,10 +36,29 @@ def _dnssec_row(dns: dict[str, Any]) -> dict[str, str]:
             "item": "DNSSEC",
             "value": "BROKEN - collected DNSSEC evidence failed validation.",
         }
+    rdap = report.get("rdap") or {}
+    secure_dns = rdap.get("secureDNS") or {}
+    root = _normalized_dns_name(report.get("root_domain") or report.get("target_domain"))
+    recursive_ds = (report.get("dns_records") or {}).get(root, {}).get("DS") or []
+    dnskeys = (dns.get("dnssec") or {}).get("dnskeys") or []
+    signed_context = secure_dns.get("delegationSigned") is True or bool(recursive_ds)
+    if signed_context and dnskeys:
+        value = (
+            "VERIFY - DNSSEC signing is indicated by RDAP/recursive DS context and an authoritative "
+            "child DNSKEY was observed, but direct parent-to-child validation could not be completed "
+            "from this scan location."
+        )
+    elif signed_context:
+        value = (
+            "VERIFY - DNSSEC signing is indicated by RDAP/recursive DS context, but direct "
+            "parent-to-child validation could not be completed from this scan location."
+        )
+    else:
+        value = "VERIFY - DNSSEC could not be classified reliably from the available evidence."
     return {
         "status": "unknown",
         "item": "DNSSEC",
-        "value": "VERIFY - DNSSEC could not be classified reliably from the available evidence.",
+        "value": value,
     }
 
 
@@ -216,7 +235,7 @@ def _delegation_authority_row(
     return {
         "status": combined_status,
         "item": "Delegation / authority",
-        "value": ". ".join(clauses) + ".",
+        "value": ". ".join(clauses) + ". VERIFY items are excluded from the weighted score.",
     }
 
 
@@ -230,7 +249,7 @@ def dns_posture_rows(report: dict[str, Any]) -> list[dict[str, str]]:
     """
     dns = report.get("dns") or {}
     return [
-        _dnssec_row(dns),
+        _dnssec_row(report, dns),
         _delegation_authority_row(report, dns),
     ]
 
