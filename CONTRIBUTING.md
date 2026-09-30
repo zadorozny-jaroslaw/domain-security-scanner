@@ -6,7 +6,7 @@ Thanks for helping improve Domain Security Scanner.
 
 Read [docs/SCOPE.md](docs/SCOPE.md). The project deliberately stays on the **passive / low-impact external posture** side of the line.
 
-For substantial behavior changes, open a feature request before investing significant implementation time.
+For substantial behavior changes, open a feature request before investing significant implementation time. Work planned for a specific release should be assigned to that release's GitHub Milestone.
 
 ## Development setup
 
@@ -37,21 +37,26 @@ python domain_security_scan.py --version
 
 ## Branching workflow
 
-Normal feature and bug-fix work should branch from `develop` and return to `develop` through a pull request. The `main` branch is reserved for released code and is updated from `develop` through a release pull request.
+Normal feature, bug-fix, documentation, refactor, and dependency work should use a short-lived topic branch based on `develop`, then return to `develop` through a pull request.
 
-Use short-lived branch names such as:
+Use branch names such as:
 
 ```text
 feature/<topic>
 fix/<topic>
 docs/<topic>
+deps/<topic>
 ```
 
-The repository uses squash merging for pull requests. After a squash-merged release pull request, the maintainer realigns `develop` with the released `main` before new feature work begins.
+`develop` is the prerelease integration branch. `main` is reserved for released code.
 
-Small maintainer-only documentation or release-metadata changes that do not alter scanner behavior may be committed directly to `develop`.
+Do not push routine implementation changes directly to either long-lived branch. The normal release path is a release pull request from `develop` to `main`, and every pull request merged into `main` represents a versioned release.
 
-See [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for the complete workflow and release synchronization steps.
+Urgent security fixes, dependency patches, and production hotfixes may use the documented emergency patch flow when waiting for the normal release cadence would delay an important fix.
+
+The repository uses squash merging for pull requests. After a normal squash-merged release pull request, the maintainer realigns `develop` with the released `main` before new feature work begins.
+
+See [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for milestone planning, the two-week release cadence, prerelease semantics, emergency patch handling, and release synchronization steps.
 
 ## Pull-request expectations
 
@@ -65,6 +70,8 @@ Keep changes focused. A new check should:
 - avoid destructive or intrusive behavior;
 - document material behavior/limitations in README or `docs/`;
 - add or update tests when practical.
+
+Normal topic pull requests should target `develop`. Pull requests to `main` are release pull requests, not routine development integration.
 
 Do not commit real customer reports, secrets, API tokens, credentials, private email lists, or sensitive target inventories.
 

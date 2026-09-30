@@ -2,15 +2,17 @@
 
 Use semantic version tags such as `v1.0.0`, `v1.0.1`, and `v1.1.0`.
 
-Releases are prepared on `develop`, promoted to `main` through a release pull request, and tagged only after the release PR is merged.
+Normal releases are prepared on `develop`, promoted to `main` through a release pull request, and tagged only after the release PR is merged.
+
+Every pull request merged into `main` represents a versioned release. Urgent security, dependency, or hotfix releases may use the emergency patch flow documented in [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md), but they do not bypass release validation.
 
 ## Release planning review
 
-- [ ] Review the active release section in `docs/ROADMAP.md`.
-- [ ] Review the detailed release plan when one exists (for v1.3.0, `docs/V1_3_DNS_PLAN.md`).
-- [ ] Confirm intended release issues are closed or explicitly deferred to a later release.
+- [ ] Review the target release section in `docs/ROADMAP.md`.
+- [ ] Review the GitHub Milestone for the target version.
+- [ ] Confirm intended release issues are closed or explicitly deferred to a later milestone.
 - [ ] Confirm no completed issue introduced behavior outside the documented low-impact scope.
-- [ ] Confirm any material deviation from the original release plan is reflected in documentation and changelog wording.
+- [ ] Confirm any material deviation from the planned release boundary is reflected in documentation and changelog wording.
 
 ## Prepare the release on `develop`
 
@@ -44,13 +46,18 @@ Releases are prepared on `develop`, promoted to `main` through a release pull re
 
 ## Release pull request
 
+For a normal release:
+
 - [ ] Open a pull request with **base `main`** and **compare `develop`**.
 - [ ] Use a release title such as `Release vX.Y.Z`.
+- [ ] Confirm the PR version matches the intended GitHub Milestone.
 - [ ] Confirm CI and security/code-scanning checks are complete.
 - [ ] Review the final diff for accidental reports, secrets, generated files, or unrelated changes.
 - [ ] Squash-merge the release pull request.
 
-Do not tag `develop`. The release tag must point at the final commit on `main` after the release pull request has been merged.
+For an urgent patch release, follow the emergency patch flow in `DEVELOPMENT_WORKFLOW.md`; the PR to `main` is still a release PR and must contain the correct patch version/changelog.
+
+Do not tag `develop`. The stable release tag must point at the final commit on `main` after the release pull request has been merged.
 
 ## Verify `main` and create the tag
 
@@ -78,9 +85,9 @@ gh release create vX.Y.Z --title "Domain Security Scanner vX.Y.Z" --generate-not
 
 Use the matching `CHANGELOG.md` entry as the curated release summary when editing the generated GitHub Release notes.
 
-## Realign `develop` after a squash release
+## Realign `develop` after a normal squash release
 
-Because the release pull request is squash-merged, `main` receives a new squash commit. Before starting the next development cycle, realign `develop` with that released commit.
+Because the normal `develop -> main` release pull request is squash-merged, `main` receives a new squash commit. Before starting the next normal development cycle, realign `develop` with that released commit.
 
 First verify that nobody has added new work to `develop` after the release pull request was created or merged. If `develop` has unpublished/new commits, do not reset it; reconcile those changes first.
 
@@ -95,11 +102,15 @@ git push --force-with-lease origin develop
 
 `--force-with-lease` is required here so the push fails rather than overwriting an unexpected newer remote `develop` state.
 
+Do not use this reset procedure after an urgent patch release if `develop` contains unrelated prerelease work. Propagate the released fix back to `develop` through a dedicated pull request instead.
+
 ## After release checks
 
 - [ ] Verify the GitHub Actions workflow is green.
 - [ ] Verify the GitHub Release points to the expected `vX.Y.Z` tag.
 - [ ] Download the source archive once and verify the expected files are present.
 - [ ] Check `Insights -> Community Standards` for accidental regressions in community-health files.
-- [ ] Confirm `main` and `develop` are aligned before creating the next feature branch.
+- [ ] Close the GitHub Milestone for the released version.
+- [ ] For a normal release, confirm `main` and `develop` are aligned before creating the next feature branch.
+- [ ] Create or confirm the milestone for the next planned release.
 - [ ] Move the roadmap's current-release pointer to the next intended release.

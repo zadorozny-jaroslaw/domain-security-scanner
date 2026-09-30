@@ -10,7 +10,7 @@ The scanner already has a functional CLI, selectable scan groups, version report
 
 This release should strengthen the interface around those capabilities rather than expand the scanner's security-assessment scope.
 
-Target completion: **before 8 October 2026**.
+Target cadence: **the two-week release iteration following v1.3.0**. The cadence is a planning target; acceptance criteria and release quality take precedence over a fixed date.
 
 ## Design principles
 
