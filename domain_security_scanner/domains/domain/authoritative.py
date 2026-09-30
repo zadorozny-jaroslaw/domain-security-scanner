@@ -220,6 +220,29 @@ def _family_probe_addresses(
     return tuple(selected[:MAX_AUTHORITATIVE_ENDPOINTS_PER_NS])
 
 
+def _same_family_fallback(
+    server: DelegatedNameserverEvidence,
+    primary_ip: str,
+    attempted: set[str],
+) -> str | None:
+    """Return one unused candidate in the primary endpoint's address family."""
+    try:
+        primary_version = ipaddress.ip_address(primary_ip).version
+    except ValueError:
+        return None
+
+    for value in server.candidate_addresses:
+        try:
+            address = ipaddress.ip_address(str(value).strip())
+        except ValueError:
+            continue
+        canonical = str(address)
+        if address.version != primary_version or canonical in attempted:
+            continue
+        return canonical
+    return None
+
+
 def _probe_plan(
     servers: tuple[DelegatedNameserverEvidence, ...],
 ) -> dict[str, tuple[str, ...]]:
@@ -304,8 +327,7 @@ class AuthoritativeDnsScanMixin:
         )
 
         for server in servers:
-            probe_addresses = plan.get(server.name, ())
-            probe_set = set(probe_addresses)
+            probe_queue = list(plan.get(server.name, ()))
             canonical_candidates: list[str] = []
             seen_candidates: set[str] = set()
             for value in server.candidate_addresses:
@@ -317,15 +339,21 @@ class AuthoritativeDnsScanMixin:
                     continue
                 seen_candidates.add(canonical)
                 canonical_candidates.append(canonical)
-            unprobed = tuple(
-                address for address in canonical_candidates if address not in probe_set
-            )
 
             endpoints: list[AuthoritativeEndpointEvidence] = []
+            actual_probe_addresses: list[str] = []
             apex_ns_result: DnsQueryResult | None = None
             apex_nameservers: tuple[str, ...] = ()
 
-            for index, server_ip in enumerate(probe_addresses):
+            while (
+                probe_queue
+                and len(actual_probe_addresses) < MAX_AUTHORITATIVE_ENDPOINTS_PER_NS
+            ):
+                server_ip = probe_queue.pop(0)
+                if server_ip in actual_probe_addresses:
+                    continue
+                probe_index = len(actual_probe_addresses)
+
                 udp_result = self.authoritative_dns_query_result(
                     delegation.zone,
                     "SOA",
@@ -342,12 +370,14 @@ class AuthoritativeDnsScanMixin:
                     transport=DnsTransport.TCP,
                     timeout=AUTHORITATIVE_DIRECT_TIMEOUT,
                 )
+                udp_observation = soa_observation(udp_result, delegation.zone)
+                tcp_observation = soa_observation(tcp_result, delegation.zone)
                 edns_result = None
 
-                # EDNS and apex-NS consistency are server-level observations.
-                # Collect each only on the primary endpoint; #14's earlier UDP
-                # NS query will be returned from cache when it used this address.
-                if index == 0:
+                # EDNS remains one server-level observation on the primary
+                # endpoint. Apex NS may move to a bounded fallback if the primary
+                # endpoint could not establish authoritative child evidence.
+                if probe_index == 0:
                     edns_result = self.authoritative_dns_query_result(
                         delegation.zone,
                         "SOA",
@@ -358,7 +388,9 @@ class AuthoritativeDnsScanMixin:
                         edns_version=0,
                         edns_payload=AUTHORITATIVE_EDNS_PAYLOAD,
                     )
-                    apex_ns_result = self.authoritative_dns_query_result(
+
+                if probe_index == 0 or not apex_nameservers:
+                    ns_result = self.authoritative_dns_query_result(
                         delegation.zone,
                         "NS",
                         server_name=server.name,
@@ -366,17 +398,9 @@ class AuthoritativeDnsScanMixin:
                         transport=DnsTransport.UDP,
                         timeout=AUTHORITATIVE_DIRECT_TIMEOUT,
                     )
-                    apex_nameservers = apex_ns_from_result(
-                        apex_ns_result,
-                        delegation.zone,
-                    )
+                    nameservers = apex_ns_from_result(ns_result, delegation.zone)
 
-                    # A small number of authoritative deployments return a
-                    # non-authoritative/referral-style NS response over plain
-                    # UDP while TCP returns authoritative child NS evidence.
-                    # Reuse the cached UDP result first, then make one bounded
-                    # TCP fallback only when the UDP observation is inconclusive.
-                    if not apex_nameservers:
+                    if not nameservers:
                         tcp_ns_result = self.authoritative_dns_query_result(
                             delegation.zone,
                             "NS",
@@ -390,15 +414,22 @@ class AuthoritativeDnsScanMixin:
                             delegation.zone,
                         )
                         if tcp_nameservers:
-                            apex_ns_result = tcp_ns_result
-                            apex_nameservers = tcp_nameservers
+                            ns_result = tcp_ns_result
+                            nameservers = tcp_nameservers
 
+                    if nameservers:
+                        apex_ns_result = ns_result
+                        apex_nameservers = nameservers
+                    elif apex_ns_result is None:
+                        apex_ns_result = ns_result
+
+                actual_probe_addresses.append(server_ip)
                 endpoints.append(
                     AuthoritativeEndpointEvidence(
                         server_name=server.name,
                         server_ip=server_ip,
-                        udp_soa=soa_observation(udp_result, delegation.zone),
-                        tcp_soa=soa_observation(tcp_result, delegation.zone),
+                        udp_soa=udp_observation,
+                        tcp_soa=tcp_observation,
                         edns_soa=(
                             soa_observation(edns_result, delegation.zone)
                             if edns_result is not None
@@ -406,6 +437,33 @@ class AuthoritativeDnsScanMixin:
                         ),
                     )
                 )
+
+                # If the primary address did not provide any parseable
+                # authoritative SOA, spend the already-bounded second endpoint on
+                # another address in the same reachable family before trying an
+                # IPv6 path that may simply be unavailable from the scanner host.
+                if (
+                    probe_index == 0
+                    and udp_observation.soa is None
+                    and tcp_observation.soa is None
+                    and len(actual_probe_addresses) < MAX_AUTHORITATIVE_ENDPOINTS_PER_NS
+                ):
+                    fallback = _same_family_fallback(
+                        server,
+                        server_ip,
+                        set(actual_probe_addresses),
+                    )
+                    if fallback:
+                        if probe_queue:
+                            probe_queue[0] = fallback
+                        else:
+                            probe_queue.append(fallback)
+
+            probe_addresses = tuple(actual_probe_addresses)
+            probe_set = set(probe_addresses)
+            unprobed = tuple(
+                address for address in canonical_candidates if address not in probe_set
+            )
 
             collected.append(
                 AuthoritativeServerEvidence(

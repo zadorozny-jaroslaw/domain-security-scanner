@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass
 
-from ...models import DnsQueryResult, DnsTransport
+from ...models import DnsQueryResult, DnsQueryState, DnsTransport
 
 
 NEGATIVE_DNS_DIRECT_TIMEOUT = 1.5
@@ -43,10 +43,6 @@ def _generated_negative_names(zone: str) -> tuple[str, ...]:
     if not zone_key:
         return ()
 
-    # RFC 1035 labels are limited to 63 octets and the presentation form of a
-    # full domain name is bounded. If the zone leaves too little room for a
-    # meaningful randomized child label, preserve uncertainty instead of
-    # constructing an invalid query name.
     max_label_length = min(63, 253 - len(zone_key) - 1)
     minimum_label_length = len("dssnx0-") + 8
     if max_label_length < minimum_label_length:
@@ -71,6 +67,10 @@ class NegativeDnsServerEvidence:
     server_ip: str | None
     negative_results: tuple[DnsQueryResult, ...] = ()
     recursion_result: DnsQueryResult | None = None
+    # None preserves legacy fixture semantics. Newly collected evidence always
+    # sets an explicit bool so open-recursion attribution is tied to a path that
+    # previously served a positively authoritative RRset for the assessed zone.
+    authority_confirmed: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -98,17 +98,52 @@ class NegativeDnsEvidenceCollectorMixin:
         return _default_recursion_probe_name(zone)
 
     @staticmethod
-    def _negative_dns_primary_endpoint(server) -> str | None:
-        """Reuse issue #15's first bounded endpoint for each authoritative NS."""
+    def _negative_dns_authority_confirmed(server, server_ip: str | None) -> bool:
+        """Require positive authoritative evidence from the same target IP."""
+        if not server_ip:
+            return False
+
+        for endpoint in tuple(getattr(server, "endpoints", ()) or ()):
+            if str(getattr(endpoint, "server_ip", "")) != str(server_ip):
+                continue
+            for attr in ("udp_soa", "tcp_soa", "edns_soa"):
+                observation = getattr(endpoint, attr, None)
+                if observation is None:
+                    continue
+                result = getattr(observation, "result", None)
+                if (
+                    getattr(observation, "soa", None) is not None
+                    and getattr(result, "state", None) == DnsQueryState.ANSWER
+                    and getattr(result, "aa", None) is True
+                ):
+                    return True
+
+        apex_result = getattr(server, "apex_ns_result", None)
+        if (
+            apex_result is not None
+            and str(getattr(apex_result, "server_ip", "")) == str(server_ip)
+            and getattr(apex_result, "state", None) == DnsQueryState.ANSWER
+            and getattr(apex_result, "aa", None) is True
+            and bool(getattr(server, "apex_nameservers", ()) or ())
+        ):
+            return True
+
+        return False
+
+    @classmethod
+    def _negative_dns_primary_endpoint(cls, server) -> str | None:
+        """Prefer an already-proven authoritative endpoint for issue #19 probes."""
         endpoints = tuple(getattr(server, "endpoints", ()) or ())
+        for endpoint in endpoints:
+            value = getattr(endpoint, "server_ip", None)
+            if value and cls._negative_dns_authority_confirmed(server, str(value)):
+                return str(value)
+
         if endpoints:
             value = getattr(endpoints[0], "server_ip", None)
             if value:
                 return str(value)
 
-        # The authoritative collector may retain a planned address even when no
-        # transport evidence was produced. Do not create an extra fallback tree;
-        # use at most its first already-selected probe address.
         probe_addresses = tuple(getattr(server, "probe_addresses", ()) or ())
         if probe_addresses:
             return str(probe_addresses[0])
@@ -117,10 +152,12 @@ class NegativeDnsEvidenceCollectorMixin:
     def collect_negative_dns_evidence(self, authoritative_dns) -> NegativeDnsEvidence | None:
         """Collect two negative-name probes and one recursion probe per NS.
 
-        Negative-name observations use RD=0 and one existing primary endpoint per
+        Negative-name observations use RD=0 and one existing endpoint per
         delegated server. The recursion observation uses RD=1 exactly once per
-        server against a stable out-of-zone name. This collector performs no
-        amplification measurement, retry loop, enumeration, or scoring.
+        server against a stable out-of-zone name. The selected endpoint is
+        annotated with whether the same IP previously produced positive
+        authoritative evidence, preventing an intercepted recursive response from
+        being attributed blindly to the assessed authoritative service.
         """
         if authoritative_dns is None:
             return None
@@ -138,10 +175,15 @@ class NegativeDnsEvidenceCollectorMixin:
                     NegativeDnsServerEvidence(
                         server_name=server_name,
                         server_ip=None,
+                        authority_confirmed=False,
                     )
                 )
                 continue
 
+            authority_confirmed = self._negative_dns_authority_confirmed(
+                server,
+                server_ip,
+            )
             negative_results = tuple(
                 self.authoritative_dns_query_result(
                     name,
@@ -172,6 +214,7 @@ class NegativeDnsEvidenceCollectorMixin:
                     server_ip=server_ip,
                     negative_results=negative_results,
                     recursion_result=recursion_result,
+                    authority_confirmed=authority_confirmed,
                 )
             )
 
@@ -276,6 +319,7 @@ def negative_dns_report_data(evidence, analysis) -> dict:
                 "server_ip": server_analysis.server_ip,
                 "status": server_analysis.recursion_state.value,
                 "reason": server_analysis.recursion_reason,
+                "authority_confirmed": raw_server.authority_confirmed,
                 "query": _query_report(raw_server.recursion_result),
             }
         )

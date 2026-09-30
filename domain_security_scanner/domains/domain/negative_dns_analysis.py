@@ -151,16 +151,23 @@ def _server_negative_state(
             len(set(fingerprints)) == 1,
         )
 
-    # Mixed conclusive observations (for example NXDOMAIN on one randomized
-    # label and a positive answer on another) are deliberately not generalized
-    # into wildcard or negative behavior.
     return NegativeDnsState.UNKNOWN, False, None
 
 
-def analyze_recursion_result(result: DnsQueryResult | None) -> tuple[RecursionState, str]:
-    """Require positive resolution evidence before declaring open recursion."""
+def analyze_recursion_result(
+    result: DnsQueryResult | None,
+    *,
+    authority_confirmed: bool | None = None,
+) -> tuple[RecursionState, str]:
+    """Require positive, attributable resolution evidence for open recursion."""
     if result is None:
         return RecursionState.UNKNOWN, "No recursion observation was collected."
+
+    if authority_confirmed is False:
+        return (
+            RecursionState.UNKNOWN,
+            "The target IP was not independently confirmed as authoritative for the assessed zone, so the recursive response is not attributed to that authoritative service.",
+        )
 
     if not result.request_recursion_desired:
         return RecursionState.UNKNOWN, "The observation did not request recursion."
@@ -169,8 +176,6 @@ def analyze_recursion_result(result: DnsQueryResult | None) -> tuple[RecursionSt
     if rcode == "REFUSED":
         return RecursionState.CLOSED, "The server explicitly refused the recursive query."
 
-    # RA by itself is only a capability advertisement.  Open recursion requires
-    # a usable non-authoritative resolution result for the out-of-zone query.
     if (
         result.ra is True
         and result.aa is False
@@ -183,7 +188,7 @@ def analyze_recursion_result(result: DnsQueryResult | None) -> tuple[RecursionSt
     ):
         return (
             RecursionState.OPEN,
-            "The server returned a conclusive non-authoritative result with recursion available for the out-of-zone query.",
+            "The confirmed authoritative endpoint returned a conclusive non-authoritative result with recursion available for the out-of-zone query.",
         )
 
     if result.state in {
@@ -215,7 +220,10 @@ def analyze_negative_dns_server(
         evidence,
         probes,
     )
-    recursion_state, recursion_reason = analyze_recursion_result(server.recursion_result)
+    recursion_state, recursion_reason = analyze_recursion_result(
+        server.recursion_result,
+        authority_confirmed=server.authority_confirmed,
+    )
     return NegativeDnsServerAnalysis(
         server_name=server.server_name,
         server_ip=server.server_ip,

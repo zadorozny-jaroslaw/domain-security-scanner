@@ -10,7 +10,8 @@ from ...models import DnsQueryResult, DnsQueryState, DnsTransport
 DNSSEC_DIRECT_TIMEOUT = 1.5
 DNSSEC_EDNS_PAYLOAD = 1232
 DNSSEC_APEX_RRTYPES = ("SOA", "NS")
-MAX_DNSSEC_CHILD_ENDPOINT_PROBES = 2
+MAX_DNSSEC_PARENT_ENDPOINT_PROBES = 4
+MAX_DNSSEC_CHILD_ENDPOINT_PROBES = 4
 
 
 def normalize_dnssec_name(value: str) -> str:
@@ -47,6 +48,9 @@ class DnssecEvidence:
     child_probe_limit_reached: bool = False
     # Appended for issue #17 to preserve the positional layout of issue #16.
     denial_probe: DnssecQueryEvidence | None = None
+    # Appended for issue #20 stabilization. The selected parent_ds remains the
+    # compatibility field; attempts explain bounded fallback decisions.
+    parent_ds_attempts: tuple[DnssecQueryEvidence, ...] = ()
 
 
 def _canonical_ip(value: str) -> str | None:
@@ -56,29 +60,89 @@ def _canonical_ip(value: str) -> str | None:
         return None
 
 
+def dnssec_parent_endpoints(
+    delegation: Any,
+    *,
+    limit: int = MAX_DNSSEC_PARENT_ENDPOINT_PROBES,
+) -> tuple[tuple[str | None, str], ...]:
+    """Return a bounded, breadth-first set of parent authoritative endpoints.
+
+    The parent server that produced the delegation referral is tried first so a
+    healthy scan normally adds no extra traffic. When that endpoint cannot give
+    conclusive DS evidence, other already-resolved parent nameservers are tried
+    breadth-first instead of turning one path anomaly into DNSSEC UNKNOWN.
+    """
+    if delegation is None or limit <= 0:
+        return ()
+
+    selected: list[tuple[str | None, str]] = []
+    seen: set[tuple[str | None, str]] = set()
+
+    def add(server_name, server_ip) -> None:
+        if len(selected) >= limit:
+            return
+        canonical = _canonical_ip(server_ip)
+        if not canonical:
+            return
+        normalized_name = (
+            normalize_dnssec_name(server_name) if server_name else None
+        )
+        key = (normalized_name, canonical)
+        if key in seen:
+            return
+        seen.add(key)
+        selected.append(key)
+
+    add(
+        getattr(delegation, "source_server_name", None),
+        getattr(delegation, "source_server_ip", None),
+    )
+    if len(selected) >= limit:
+        return tuple(selected)
+
+    parent_servers = tuple(
+        getattr(delegation, "parent_server_addresses", ()) or ()
+    )
+    max_addresses = max(
+        (len(tuple(getattr(item, "addresses", ()) or ())) for item in parent_servers),
+        default=0,
+    )
+    for address_index in range(max_addresses):
+        for item in parent_servers:
+            addresses = tuple(getattr(item, "addresses", ()) or ())
+            if address_index >= len(addresses):
+                continue
+            add(getattr(item, "name", None), addresses[address_index])
+            if len(selected) >= limit:
+                return tuple(selected)
+
+    return tuple(selected)
+
+
 def dnssec_child_endpoints(
     delegation: Any,
     *,
     limit: int = MAX_DNSSEC_CHILD_ENDPOINT_PROBES,
 ) -> tuple[tuple[str, str], ...]:
-    """Choose a small deterministic set of child-authoritative endpoints.
+    """Choose a fair, bounded set of child-authoritative endpoints.
 
-    Endpoints already proven authoritative by issue #14 are preferred. Remaining
-    candidate addresses are only used as bounded fallbacks. This function is
-    pure and intentionally accepts the existing delegation evidence by shape so
-    the DNSSEC module does not create a circular dependency on the collector.
+    Within each delegated server, endpoints already proven authoritative by
+    issue #14 are preferred. Across servers, selection is breadth-first so one
+    multi-address nameserver cannot consume the whole DNSSEC probe budget before
+    another delegated nameserver receives a first chance.
     """
     if delegation is None or limit <= 0:
         return ()
 
-    preferred: list[tuple[str, str]] = []
-    fallback: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-
+    per_server: list[tuple[str, tuple[str, ...]]] = []
     for server in getattr(delegation, "delegated_servers", ()) or ():
         server_name = normalize_dnssec_name(getattr(server, "name", ""))
         if not server_name:
             continue
+
+        preferred: list[str] = []
+        fallback: list[str] = []
+        seen: set[str] = set()
 
         for result in getattr(server, "authority_queries", ()) or ():
             if (
@@ -87,23 +151,33 @@ def dnssec_child_endpoints(
             ):
                 continue
             server_ip = _canonical_ip(getattr(result, "server_ip", ""))
-            if not server_ip:
+            if not server_ip or server_ip in seen:
                 continue
-            key = (server_name, server_ip)
-            if key not in seen:
-                seen.add(key)
-                preferred.append(key)
+            seen.add(server_ip)
+            preferred.append(server_ip)
 
         for value in getattr(server, "candidate_addresses", ()) or ():
             server_ip = _canonical_ip(value)
-            if not server_ip:
+            if not server_ip or server_ip in seen:
                 continue
-            key = (server_name, server_ip)
-            if key not in seen:
-                seen.add(key)
-                fallback.append(key)
+            seen.add(server_ip)
+            fallback.append(server_ip)
 
-    return tuple((preferred + fallback)[:limit])
+        ordered = tuple(preferred + fallback)
+        if ordered:
+            per_server.append((server_name, ordered))
+
+    selected: list[tuple[str, str]] = []
+    max_addresses = max((len(addresses) for _, addresses in per_server), default=0)
+    for address_index in range(max_addresses):
+        for server_name, addresses in per_server:
+            if address_index >= len(addresses):
+                continue
+            selected.append((server_name, addresses[address_index]))
+            if len(selected) >= limit:
+                return tuple(selected)
+
+    return tuple(selected)
 
 
 class DnssecEvidenceCollectorMixin:
@@ -153,29 +227,38 @@ class DnssecEvidenceCollectorMixin:
     def collect_dnssec_evidence(self, delegation: Any) -> DnssecEvidence:
         """Collect parent DS, child DNSKEY, and selected signed apex RRsets.
 
-        This is collection only. DS matching, RRSIG time checks, cryptographic
-        validation, and the ``unsigned/secure/broken/unknown`` state machine are
-        deliberately left to the next implementation iteration.
+        Collection stays bounded, but it does not bind the whole DNSSEC decision
+        to one parent or one child address. Conclusive evidence from independent
+        authoritative endpoints may be combined and is later cryptographically
+        validated by ``dnssec_analysis.py``.
         """
         zone = normalize_dnssec_name(
             getattr(delegation, "zone", None) or getattr(self, "root_domain", "")
         )
         parent_ds = None
+        parent_ds_attempts: list[DnssecQueryEvidence] = []
 
-        parent_ip = _canonical_ip(getattr(delegation, "source_server_ip", ""))
-        parent_name = getattr(delegation, "source_server_name", None)
-        if zone and parent_ip:
-            parent_ds = self._dnssec_direct_query(
-                zone,
-                "DS",
-                server_name=parent_name,
-                server_ip=parent_ip,
-            )
+        if zone:
+            for parent_name, parent_ip in dnssec_parent_endpoints(delegation):
+                attempt = self._dnssec_direct_query(
+                    zone,
+                    "DS",
+                    server_name=parent_name,
+                    server_ip=parent_ip,
+                )
+                parent_ds_attempts.append(attempt)
+                if attempt.result.state in {
+                    DnsQueryState.ANSWER,
+                    DnsQueryState.NO_ANSWER,
+                }:
+                    parent_ds = attempt
+                    break
+
+        if parent_ds is None and parent_ds_attempts:
+            parent_ds = parent_ds_attempts[0]
 
         # An authoritative parent NODATA response for DS conclusively means the
-        # delegation is unsigned. Do not query child DNSKEY/SOA/NS in that case:
-        # those queries cannot change the DNSSEC state and would add unnecessary
-        # network traffic to the low-impact scan.
+        # delegation is unsigned. Do not query child DNSKEY/SOA/NS in that case.
         if (
             parent_ds is not None
             and parent_ds.result.state == DnsQueryState.NO_ANSWER
@@ -185,13 +268,17 @@ class DnssecEvidenceCollectorMixin:
                 parent_ds=parent_ds,
                 child_probe_limit=MAX_DNSSEC_CHILD_ENDPOINT_PROBES,
                 child_probe_limit_reached=False,
+                parent_ds_attempts=tuple(parent_ds_attempts),
             )
 
+        delegated_servers = tuple(
+            getattr(delegation, "delegated_servers", ()) or ()
+        )
         all_available = dnssec_child_endpoints(
             delegation,
             limit=max(
                 MAX_DNSSEC_CHILD_ENDPOINT_PROBES,
-                len(getattr(delegation, "delegated_servers", ()) or ()) * 2,
+                len(delegated_servers) * MAX_DNSSEC_CHILD_ENDPOINT_PROBES,
             ),
         )
         endpoints = all_available[:MAX_DNSSEC_CHILD_ENDPOINT_PROBES]
@@ -206,46 +293,78 @@ class DnssecEvidenceCollectorMixin:
                 server_ip=server_ip,
             )
             dnskey_attempts.append(attempt)
-            if not attempt.result.failed:
+            if attempt.result.state == DnsQueryState.ANSWER:
                 selected_dnskey = attempt
                 break
 
+        # Preserve conclusive broken-chain evidence only when every bounded child
+        # endpoint that was tried agrees that DNSKEY is absent. A single anomalous
+        # NODATA response must not override other unavailable paths.
+        if selected_dnskey is None and dnskey_attempts:
+            if all(
+                item.result.state in {
+                    DnsQueryState.NO_ANSWER,
+                    DnsQueryState.NXDOMAIN,
+                }
+                for item in dnskey_attempts
+            ):
+                selected_dnskey = dnskey_attempts[0]
+
         apex_rrsets: list[DnssecQueryEvidence] = []
         denial_probe = None
-        if selected_dnskey is not None:
+        if selected_dnskey is not None and selected_dnskey.result.state == DnsQueryState.ANSWER:
+            selected_endpoint = (
+                selected_dnskey.server_name or "",
+                selected_dnskey.server_ip,
+            )
+            ordered_endpoints = [selected_endpoint]
+            ordered_endpoints.extend(
+                item for item in endpoints if item != selected_endpoint
+            )
+
+            # SOA and NS may be served successfully by a different authoritative
+            # anycast/address path than DNSKEY. Each RRset gets a bounded fallback
+            # across the same child endpoint budget; cryptographic validation is
+            # what ultimately decides whether the evidence is trustworthy.
             for qtype in DNSSEC_APEX_RRTYPES:
-                apex_rrsets.append(
-                    self._dnssec_direct_query(
+                attempts: list[DnssecQueryEvidence] = []
+                chosen = None
+                for server_name, server_ip in ordered_endpoints:
+                    attempt = self._dnssec_direct_query(
                         zone,
                         qtype,
+                        server_name=server_name or None,
+                        server_ip=server_ip,
+                    )
+                    attempts.append(attempt)
+                    if attempt.result.state == DnsQueryState.ANSWER:
+                        chosen = attempt
+                        break
+                if chosen is None and attempts:
+                    chosen = attempts[0]
+                if chosen is not None:
+                    apex_rrsets.append(chosen)
+
+            # Issue #17 reuses one high-entropy negative name already generated
+            # by issue #19. Keep this to one DNSSEC-aware query on the DNSKEY
+            # endpoint; inability to observe denial remains advisory/unknown.
+            negative_dns = getattr(self, "negative_dns", None)
+            negative_names = tuple(
+                getattr(negative_dns, "negative_names", ()) or ()
+            )
+            if negative_names:
+                candidate = normalize_dnssec_name(negative_names[0])
+                if (
+                    candidate
+                    and candidate != zone
+                    and candidate.endswith("." + zone)
+                ):
+                    denial_probe = self._dnssec_direct_query(
+                        candidate,
+                        "A",
                         server_name=selected_dnskey.server_name,
                         server_ip=selected_dnskey.server_ip,
                     )
-                )
-
-            # Issue #17 reuses one high-entropy negative name already generated
-            # by issue #19 instead of creating a second random-name mechanism.
-            # The extra query is DNSSEC-aware (DO=1) and targets only the same
-            # selected authoritative endpoint used for DNSKEY/SOA/NS evidence.
-            # This keeps denial-of-existence collection bounded to one query.
-            if selected_dnskey.result.state == DnsQueryState.ANSWER:
-                negative_dns = getattr(self, "negative_dns", None)
-                negative_names = tuple(
-                    getattr(negative_dns, "negative_names", ()) or ()
-                )
-                if negative_names:
-                    candidate = normalize_dnssec_name(negative_names[0])
-                    if (
-                        candidate
-                        and candidate != zone
-                        and candidate.endswith("." + zone)
-                    ):
-                        denial_probe = self._dnssec_direct_query(
-                            candidate,
-                            "A",
-                            server_name=selected_dnskey.server_name,
-                            server_ip=selected_dnskey.server_ip,
-                        )
 
         return DnssecEvidence(
             zone=zone,
@@ -259,6 +378,7 @@ class DnssecEvidenceCollectorMixin:
                 len(all_available) > MAX_DNSSEC_CHILD_ENDPOINT_PROBES
                 and len(dnskey_attempts) >= MAX_DNSSEC_CHILD_ENDPOINT_PROBES
             ),
+            parent_ds_attempts=tuple(parent_ds_attempts),
         )
 
 
@@ -478,6 +598,9 @@ def dnssec_report_data(
         "rrsig": signatures,
         "queries": {
             "parent_ds": _query_report(evidence.parent_ds),
+            "parent_ds_attempts": [
+                _query_report(item) for item in evidence.parent_ds_attempts
+            ],
             "dnskey_attempts": [
                 _query_report(item) for item in evidence.dnskey_attempts
             ],
@@ -491,6 +614,7 @@ def dnssec_report_data(
             "validation_targets": validation_targets,
             "validated_rrsets": validated_rrsets,
             "complete_zone_validation": False,
+            "parent_probe_limit": MAX_DNSSEC_PARENT_ENDPOINT_PROBES,
             "child_probe_limit": evidence.child_probe_limit,
             "child_probe_limit_reached": evidence.child_probe_limit_reached,
             "denial_probe_limit": 1,
@@ -566,11 +690,13 @@ __all__ = [
     "DNSSEC_APEX_RRTYPES",
     "DNSSEC_DIRECT_TIMEOUT",
     "DNSSEC_EDNS_PAYLOAD",
+    "MAX_DNSSEC_PARENT_ENDPOINT_PROBES",
     "MAX_DNSSEC_CHILD_ENDPOINT_PROBES",
     "DnssecEvidence",
     "DnssecEvidenceCollectorMixin",
     "DnssecScanMixin",
     "DnssecQueryEvidence",
+    "dnssec_parent_endpoints",
     "dnssec_child_endpoints",
     "dnssec_report_data",
 ]
