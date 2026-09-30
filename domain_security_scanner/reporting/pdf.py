@@ -618,7 +618,10 @@ def generate_pdf(report: dict[str, Any], output: Path):
             if impact:
                 result_text += f"<br/><font size='7'><b>Why it matters:</b> {p(impact)}</font>"
         rows.append([
-            c["status"].upper(), c["category"], c["name"], Paragraph(result_text, styles["Small"])
+            c["status"].upper(),
+            c["category"],
+            Paragraph(p(c["name"]), styles["Small"]),
+            Paragraph(result_text, styles["Small"]),
         ])
     table = Table(rows, colWidths=[20*mm, 24*mm, 38*mm, 94*mm], repeatRows=1)
     table_style = [
