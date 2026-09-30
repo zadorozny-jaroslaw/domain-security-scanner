@@ -17,7 +17,8 @@ from .dns_path_integrity import (
 
 DOH_TIMEOUT = 3.0
 DOH_EDNS_PAYLOAD = 1232
-ENCRYPTED_DNS_RRTYPES = ("SOA", "NS")
+ENCRYPTED_DNS_BASE_RRTYPES = ("SOA", "NS")
+ENCRYPTED_DNS_RRTYPES = ("SOA", "NS", "DS", "DNSKEY")
 DOH_RESOLVERS = (
     ("cloudflare", "https://cloudflare-dns.com/dns-query"),
     ("google", "https://dns.google/dns-query"),
@@ -43,6 +44,7 @@ class EncryptedDnsObservation:
     resolver_url: str
     qtype: str
     result: DnsQueryResult
+    authenticated_data: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -213,6 +215,9 @@ def _doh_query(
         resolver_url=resolver_url,
         qtype=str(qtype).upper(),
         result=result,
+        authenticated_data=(
+            bool(response.flags & dns.flags.AD) if response is not None else None
+        ),
     )
 
 
@@ -261,7 +266,7 @@ def _consensus_for_qtype(
 
 def _overall_status(rrsets: tuple[EncryptedDnsRrsetEvidence, ...]) -> str:
     by_type = {item.qtype: item.status for item in rrsets}
-    required = [by_type.get(qtype, RRSET_UNAVAILABLE) for qtype in ENCRYPTED_DNS_RRTYPES]
+    required = [by_type.get(qtype, RRSET_UNAVAILABLE) for qtype in ENCRYPTED_DNS_BASE_RRTYPES]
     if all(status == RRSET_CONSENSUS for status in required):
         return ENCRYPTED_DNS_USABLE
     if any(status == RRSET_DISAGREEMENT for status in required):
@@ -331,7 +336,10 @@ def collect_encrypted_dns_evidence(
     )
 
 
-def encrypted_dns_report_data(evidence: EncryptedDnsEvidence | None) -> dict[str, Any]:
+def encrypted_dns_report_data(
+    evidence: EncryptedDnsEvidence | None,
+    dnssec_validation=None,
+) -> dict[str, Any]:
     if evidence is None:
         return {
             "status": ENCRYPTED_DNS_NOT_NEEDED,
@@ -356,6 +364,7 @@ def encrypted_dns_report_data(evidence: EncryptedDnsEvidence | None) -> dict[str
                     "rcode": observation.result.rcode,
                     "authoritative": observation.result.aa,
                     "recursion_available": observation.result.ra,
+                    "authenticated_data": observation.authenticated_data,
                     "error": observation.result.error,
                     "rdata": list(
                         _requested_rdata(observation.result, rrset.qtype)
@@ -365,7 +374,7 @@ def encrypted_dns_report_data(evidence: EncryptedDnsEvidence | None) -> dict[str
             ],
         }
 
-    return {
+    report = {
         "status": evidence.status,
         "attempted": evidence.attempted,
         "trigger": evidence.trigger,
@@ -383,6 +392,13 @@ def encrypted_dns_report_data(evidence: EncryptedDnsEvidence | None) -> dict[str
             "qtypes": list(ENCRYPTED_DNS_RRTYPES),
         },
     }
+    if dnssec_validation is not None:
+        from .encrypted_dnssec import encrypted_dnssec_validation_report_data
+
+        report["dnssec_validation"] = encrypted_dnssec_validation_report_data(
+            dnssec_validation
+        )
+    return report
 
 
 def encrypted_dns_finding(evidence: EncryptedDnsEvidence | None):
@@ -434,6 +450,7 @@ class EncryptedDnsScanMixin:
 
 __all__ = [
     "DOH_RESOLVERS",
+    "ENCRYPTED_DNS_BASE_RRTYPES",
     "ENCRYPTED_DNS_RRTYPES",
     "ENCRYPTED_DNS_USABLE",
     "EncryptedDnsEvidence",

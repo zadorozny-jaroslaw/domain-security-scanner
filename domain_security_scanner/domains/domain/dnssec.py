@@ -25,7 +25,7 @@ class DnssecQueryEvidence:
 
     qtype: str
     server_name: str | None
-    server_ip: str
+    server_ip: str | None
     udp_result: DnsQueryResult
     tcp_result: DnsQueryResult | None = None
 
@@ -51,6 +51,9 @@ class DnssecEvidence:
     # Appended for issue #20 stabilization. The selected parent_ds remains the
     # compatibility field; attempts explain bounded fallback decisions.
     parent_ds_attempts: tuple[DnssecQueryEvidence, ...] = ()
+    # Issue #20 encrypted fallback may provide the same bounded validation
+    # targets over HTTPS when direct port-53 attribution is not trustworthy.
+    source: str = "direct_authoritative"
 
 
 def _canonical_ip(value: str) -> str | None:
@@ -402,6 +405,7 @@ def _query_report(evidence: DnssecQueryEvidence | None) -> dict | None:
     result = evidence.result
     return {
         "qtype": evidence.qtype,
+        "query_mode": result.query_mode.value,
         "server_name": evidence.server_name,
         "server_ip": evidence.server_ip,
         "transport": result.transport.value if result.transport else None,
@@ -530,6 +534,7 @@ def dnssec_report_data(
     if evidence is None or analysis is None:
         return {
             "status": "unknown",
+            "validation_source": None,
             "policy_version": None,
             "algorithm_policy": _algorithm_policy_report(algorithm_analysis),
             "denial": _denial_report(denial_analysis),
@@ -586,6 +591,7 @@ def dnssec_report_data(
     return {
         "status": analysis.state.value,
         "reason": analysis.reason,
+        "validation_source": getattr(evidence, "source", "direct_authoritative"),
         "zone": evidence.zone,
         # Kept for backward compatibility with issue #16. Issue #17 publishes
         # the current IANA snapshot separately under algorithm_policy.
@@ -627,13 +633,43 @@ class DnssecScanMixin(DnssecEvidenceCollectorMixin):
 
     def collect_domain_dns(self):
         delegation = getattr(self, "delegation", None)
-        self.dnssec = self.collect_dnssec_evidence(delegation)
+        direct_evidence = self.collect_dnssec_evidence(delegation)
 
-        from .dnssec_analysis import analyze_dnssec_evidence
+        from .dnssec_analysis import DnssecState, analyze_dnssec_evidence
         from .dnssec_denial_analysis import analyze_dnssec_denial
         from .dnssec_posture_analysis import analyze_dnssec_algorithm_posture
 
-        self.dnssec_analysis = analyze_dnssec_evidence(self.dnssec)
+        direct_analysis = analyze_dnssec_evidence(direct_evidence)
+        self.dnssec_direct = direct_evidence
+        self.dnssec_direct_analysis = direct_analysis
+        self.dnssec = direct_evidence
+        self.dnssec_analysis = direct_analysis
+        self.encrypted_dnssec_validation = None
+
+        # Direct authoritative evidence remains preferred. Only an UNKNOWN direct
+        # result may be promoted by the encrypted fallback, and only when two
+        # independent validating DoH resolvers agree and each resolver's material
+        # passes the existing local cryptographic validator. Fallback evidence is
+        # deliberately promotion-only: it cannot turn an unavailable direct path
+        # into BROKEN or UNSIGNED.
+        if direct_analysis.state == DnssecState.UNKNOWN:
+            from .encrypted_dnssec import (
+                ENCRYPTED_DNSSEC_SECURE,
+                validate_dnssec_from_encrypted,
+            )
+
+            validation = validate_dnssec_from_encrypted(
+                getattr(self, "encrypted_dns", None)
+            )
+            self.encrypted_dnssec_validation = validation
+            if (
+                validation.status == ENCRYPTED_DNSSEC_SECURE
+                and validation.selected_evidence is not None
+                and validation.selected_analysis is not None
+            ):
+                self.dnssec = validation.selected_evidence
+                self.dnssec_analysis = validation.selected_analysis
+
         self.dnssec_policy_analysis = analyze_dnssec_algorithm_posture(self.dnssec)
         self.dnssec_denial_analysis = analyze_dnssec_denial(self.dnssec)
         result = super().collect_domain_dns()

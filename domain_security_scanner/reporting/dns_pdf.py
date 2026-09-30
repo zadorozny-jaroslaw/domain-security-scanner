@@ -19,10 +19,18 @@ def status_label(status: str) -> str:
 def _dnssec_row(report: dict[str, Any], dns: dict[str, Any]) -> dict[str, str]:
     state = str((dns.get("dnssec") or {}).get("status") or "unknown").lower()
     if state == "secure":
+        source = str((dns.get("dnssec") or {}).get("validation_source") or "")
+        if source == "encrypted_recursive":
+            value = (
+                "SECURE - local DNSSEC cryptographic validation completed using consensus "
+                "material from two validating DNS-over-HTTPS resolvers."
+            )
+        else:
+            value = "SECURE - bounded DNSSEC validation completed successfully."
         return {
             "status": "pass",
             "item": "DNSSEC",
-            "value": "SECURE - bounded DNSSEC validation completed successfully.",
+            "value": value,
         }
     if state == "unsigned":
         return {

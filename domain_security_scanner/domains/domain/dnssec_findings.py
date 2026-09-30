@@ -45,12 +45,25 @@ def build_dnssec_findings(
     zone = evidence.zone or "domena rejestrowana"
 
     if analysis.state == DnssecState.SECURE:
+        source = getattr(evidence, "source", "direct_authoritative")
+        if source == "encrypted_recursive":
+            message = (
+                f"DNSSEC dla {zone} został poprawnie zwalidowany kryptograficznie z materiału "
+                "DS/DNSKEY/SOA/NS pozyskanego przez dwa niezależne, walidujące resolvery "
+                "DNS-over-HTTPS. Scanner lokalnie potwierdził dopasowanie DS do DNSKEY oraz "
+                "aktualne podpisy DNSKEY/SOA/NS; encrypted fallback nie zastępuje testów "
+                "konkretnego autorytatywnego endpointu."
+            )
+        else:
+            message = (
+                f"DNSSEC dla {zone} został poprawnie zwalidowany: DS rodzica pasuje do "
+                "uwierzytelnionego materiału DNSKEY, a wybrane apex RRsety SOA/NS mają "
+                "poprawne i aktualne podpisy."
+            )
         primary = DnssecFinding(
             "DNSSEC",
             "pass",
-            f"DNSSEC dla {zone} został poprawnie zwalidowany: DS rodzica pasuje do "
-            "uwierzytelnionego materiału DNSKEY, a wybrane apex RRsety SOA/NS mają "
-            "poprawne i aktualne podpisy.",
+            message,
             DNSSEC_SCORE_WEIGHT,
             DNSSEC_SCORE_WEIGHT,
         )

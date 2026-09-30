@@ -60,10 +60,13 @@ class Scanner(
         self.authoritative_dns = None
         self.authoritative_dns_analysis = None
         self.encrypted_dns = None
+        self.encrypted_dnssec_validation = None
         self.negative_dns = None
         self.negative_dns_analysis = None
         self.dnssec = None
+        self.dnssec_direct = None
         self.dnssec_analysis = None
+        self.dnssec_direct_analysis = None
         self.dnssec_policy_analysis = None
         self.dnssec_denial_analysis = None
 
@@ -164,7 +167,8 @@ class Scanner(
                     getattr(self, "caa", {}),
                 ),
                 "encrypted_recursive": encrypted_dns_report_data(
-                    getattr(self, "encrypted_dns", None)
+                    getattr(self, "encrypted_dns", None),
+                    getattr(self, "encrypted_dnssec_validation", None),
                 ),
                 "dnssec": dnssec_report_data(
                     getattr(self, "dnssec", None),

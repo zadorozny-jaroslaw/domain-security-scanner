@@ -13,6 +13,7 @@ from domain_security_scanner.domains.domain.encrypted_dns import (
     ENCRYPTED_DNS_DISAGREEMENT,
     ENCRYPTED_DNS_USABLE,
     RRSET_CONSENSUS,
+    RRSET_UNAVAILABLE,
     collect_encrypted_dns_evidence,
     encrypted_dns_fallback_needed,
     encrypted_dns_finding,
@@ -200,7 +201,7 @@ class EncryptedDnsFallbackTest(unittest.TestCase):
         self.assertTrue(evidence.attempted)
         self.assertEqual(evidence.status, ENCRYPTED_DNS_USABLE)
         self.assertEqual(evidence.trigger, "suspected_interception")
-        self.assertEqual(len(scanner.session.calls), 4)
+        self.assertEqual(len(scanner.session.calls), 8)
 
     def test_two_doh_resolvers_reach_zone_level_consensus(self):
         scanner = SimpleNamespace(
@@ -216,9 +217,14 @@ class EncryptedDnsFallbackTest(unittest.TestCase):
         self.assertEqual(evidence.status, ENCRYPTED_DNS_USABLE)
         self.assertEqual(
             {item.qtype: item.status for item in evidence.rrsets},
-            {"SOA": RRSET_CONSENSUS, "NS": RRSET_CONSENSUS},
+            {
+                "SOA": RRSET_CONSENSUS,
+                "NS": RRSET_CONSENSUS,
+                "DS": RRSET_UNAVAILABLE,
+                "DNSKEY": RRSET_UNAVAILABLE,
+            },
         )
-        self.assertEqual(len(scanner.session.calls), 4)
+        self.assertEqual(len(scanner.session.calls), 8)
 
     def test_consensus_ignores_recursive_cache_ttl_differences(self):
         scanner = SimpleNamespace(
