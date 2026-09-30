@@ -16,6 +16,7 @@ from .domains.domain.encrypted_dns import (
 )
 from .domains.domain.negative_dns import NegativeDnsScanMixin, negative_dns_report_data
 from .domains.domain.reporting import dns_infrastructure_report_data
+from .domains.domain.dns_zone_recovery import dns_zone_recovery_report_data
 from .domains.mail import MailScanMixin
 from .domains.tls import TlsScanMixin
 from .domains.web import WebScanMixin
@@ -61,6 +62,7 @@ class Scanner(
         self.authoritative_dns_analysis = None
         self.encrypted_dns = None
         self.encrypted_dnssec_validation = None
+        self.dns_zone_recovery = None
         self.negative_dns = None
         self.negative_dns_analysis = None
         self.dnssec = None
@@ -169,6 +171,9 @@ class Scanner(
                 "encrypted_recursive": encrypted_dns_report_data(
                     getattr(self, "encrypted_dns", None),
                     getattr(self, "encrypted_dnssec_validation", None),
+                ),
+                "zone_recovery": dns_zone_recovery_report_data(
+                    getattr(self, "dns_zone_recovery", None),
                 ),
                 "dnssec": dnssec_report_data(
                     getattr(self, "dnssec", None),

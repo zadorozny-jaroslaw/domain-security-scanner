@@ -44,8 +44,11 @@ class _FakeDohSession:
     def post(self, url, *, data, headers, timeout):
         query = dns.message.from_wire(data)
         qtype = dns.rdatatype.to_text(query.question[0].rdtype)
-        self.calls.append((url, qtype, headers, timeout))
-        spec = self.answers[(url, qtype)]
+        qname = query.question[0].name.to_text().lower().rstrip(".")
+        self.calls.append((url, qname, qtype, headers, timeout))
+        spec = self.answers.get((url, qname, qtype))
+        if spec is None:
+            spec = self.answers[(url, qtype)]
         if isinstance(spec, BaseException):
             raise spec
 
@@ -152,12 +155,22 @@ def _answers(*, disagreement: bool = False, ttl_difference: bool = False):
     soa = "ns1.example.net. hostmaster.example.com. 42 3600 600 86400 300"
     ns = ("ns1.example.net.", "ns2.example.net.")
     google_ns = ("ns1.example.net.", "ns3.example.net.") if disagreement else ns
-    return {
+    answers = {
         (cloudflare, "SOA"): (300, (soa,)),
         (google, "SOA"): (120 if ttl_difference else 300, (soa,)),
         (cloudflare, "NS"): (300, ns),
         (google, "NS"): (120 if ttl_difference else 300, google_ns),
     }
+    if not disagreement:
+        host_addresses = {
+            "ns1.example.net": ("192.0.2.11",),
+            "ns2.example.net": ("192.0.2.12",),
+        }
+        for resolver in (cloudflare, google):
+            for host, values in host_addresses.items():
+                answers[(resolver, host, "A")] = (300, values)
+                answers[(resolver, host, "AAAA")] = (300, ("2001:db8::11",) if host.startswith("ns1") else ("2001:db8::12",))
+    return answers
 
 
 class EncryptedDnsFallbackTest(unittest.TestCase):
@@ -201,7 +214,7 @@ class EncryptedDnsFallbackTest(unittest.TestCase):
         self.assertTrue(evidence.attempted)
         self.assertEqual(evidence.status, ENCRYPTED_DNS_USABLE)
         self.assertEqual(evidence.trigger, "suspected_interception")
-        self.assertEqual(len(scanner.session.calls), 8)
+        self.assertEqual(len(scanner.session.calls), 16)
 
     def test_two_doh_resolvers_reach_zone_level_consensus(self):
         scanner = SimpleNamespace(
@@ -224,7 +237,7 @@ class EncryptedDnsFallbackTest(unittest.TestCase):
                 "DNSKEY": RRSET_UNAVAILABLE,
             },
         )
-        self.assertEqual(len(scanner.session.calls), 8)
+        self.assertEqual(len(scanner.session.calls), 16)
 
     def test_consensus_ignores_recursive_cache_ttl_differences(self):
         scanner = SimpleNamespace(
@@ -271,6 +284,10 @@ class EncryptedDnsFallbackTest(unittest.TestCase):
         self.assertFalse(report["scope"]["per_authoritative_server_attribution"])
         self.assertEqual(report["rrsets"]["SOA"]["status"], "consensus")
         self.assertEqual(len(report["rrsets"]["SOA"]["observations"]), 2)
+        self.assertEqual(len(report["nameservers"]), 2)
+        self.assertTrue(all(item["confirmed_addressable"] for item in report["nameservers"]))
+        self.assertTrue(all(item["alias_status"] == "direct" for item in report["nameservers"]))
+        self.assertEqual(report["scope"]["nameserver_host_qtypes"], ["A", "AAAA"])
 
     def test_successful_fallback_finding_is_non_scoring(self):
         scanner = SimpleNamespace(

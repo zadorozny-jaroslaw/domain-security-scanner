@@ -7,6 +7,7 @@ from ...utils import days_until, fallback_root_domain
 from .caa import collect_caa_policy
 from .delegation_findings import build_delegation_findings
 from .dns_scoring import CAA_MALFORMED_WEIGHT
+from .dns_zone_recovery import build_dns_zone_recovery, recover_delegation_findings
 
 
 class DomainScanMixin:
@@ -176,11 +177,19 @@ class DomainScanMixin:
         if evidence is None or analysis is None:
             return
 
-        for finding in build_delegation_findings(
+        findings = build_delegation_findings(
             evidence,
             analysis,
             getattr(self, "authoritative_dns_analysis", None),
-        ):
+        )
+        self.dns_zone_recovery = build_dns_zone_recovery(
+            getattr(self, "rdap", None),
+            getattr(self, "encrypted_dns", None),
+            getattr(self, "encrypted_dnssec_validation", None),
+        )
+        findings = recover_delegation_findings(findings, self.dns_zone_recovery)
+
+        for finding in findings:
             self.add_check(
                 "Domain",
                 finding.name,

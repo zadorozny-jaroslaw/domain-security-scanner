@@ -71,6 +71,20 @@ def _dnssec_row(report: dict[str, Any], dns: dict[str, Any]) -> dict[str, str]:
 
 
 def _delegation_row(dns: dict[str, Any]) -> dict[str, str]:
+    recovery = dns.get("zone_recovery") or {}
+    if (
+        recovery.get("available")
+        and recovery.get("registry_zone_consistent") is True
+    ):
+        return {
+            "status": "pass",
+            "item": "Delegation",
+            "value": (
+                "Registry nameserver metadata matches the encrypted apex NS view from "
+                "two independent resolvers."
+            ),
+        }
+
     delegation = dns.get("delegation") or {}
     if not delegation.get("available"):
         return {
@@ -205,19 +219,32 @@ def _delegation_authority_row(
     caa = _caa_row(dns)
 
     clauses = [f"Delegation: {status_label(delegation['status'])}"]
-
-    recursion_clause = f"Open recursion: {status_label(open_recursion['status'])}"
-    open_servers = (dns.get("open_recursion") or {}).get("open_servers") or []
-    if open_recursion["status"] == "fail" and open_servers:
-        recursion_clause += " on " + ", ".join(open_servers)
-    clauses.append(recursion_clause)
-
     secondary_statuses = []
-    if authoritative_ns["status"] != "pass":
-        clauses.append(
-            f"Apex NS RRset: {status_label(authoritative_ns['status'])}"
-        )
-        secondary_statuses.append(authoritative_ns["status"])
+
+    path_status = str((dns.get("path_integrity") or {}).get("status") or "unknown").lower()
+    direct_path_suspect = path_status in {"suspected_interception", "mixed"}
+    open_servers = (dns.get("open_recursion") or {}).get("open_servers") or []
+
+    if direct_path_suspect and open_recursion["status"] != "fail":
+        clauses.append("Direct per-server DNS: VERIFY (port-53 path suspect)")
+        secondary_statuses.append("unknown")
+    else:
+        recursion_clause = f"Open recursion: {status_label(open_recursion['status'])}"
+        if open_recursion["status"] == "fail" and open_servers:
+            recursion_clause += " on " + ", ".join(open_servers)
+        clauses.append(recursion_clause)
+
+        if authoritative_ns["status"] != "pass":
+            clauses.append(
+                f"Apex NS RRset: {status_label(authoritative_ns['status'])}"
+            )
+            secondary_statuses.append(authoritative_ns["status"])
+
+    recovery = dns.get("zone_recovery") or {}
+    if recovery.get("all_nameservers_addressable") is True:
+        clauses.append("NS addresses: OK")
+    if recovery.get("glue_required") is False:
+        clauses.append("Glue: N/A")
 
     encrypted = dns.get("encrypted_recursive") or {}
     encrypted_status = str(encrypted.get("status") or "not_needed").lower()

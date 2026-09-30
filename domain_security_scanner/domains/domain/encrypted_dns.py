@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 from typing import Any
 
 import dns.flags
@@ -19,6 +20,8 @@ DOH_TIMEOUT = 3.0
 DOH_EDNS_PAYLOAD = 1232
 ENCRYPTED_DNS_BASE_RRTYPES = ("SOA", "NS")
 ENCRYPTED_DNS_RRTYPES = ("SOA", "NS", "DS", "DNSKEY")
+ENCRYPTED_NS_HOST_RRTYPES = ("A", "AAAA")
+MAX_ENCRYPTED_NAMESERVER_HOSTS = 4
 DOH_RESOLVERS = (
     ("cloudflare", "https://cloudflare-dns.com/dns-query"),
     ("google", "https://dns.google/dns-query"),
@@ -58,6 +61,21 @@ class EncryptedDnsRrsetEvidence:
 
 
 @dataclass(frozen=True)
+class EncryptedDnsNameserverEvidence:
+    """Encrypted recursive address/alias evidence for one recovered apex NS."""
+
+    name: str
+    ipv4: tuple[str, ...] = ()
+    ipv6: tuple[str, ...] = ()
+    cname_targets: tuple[str, ...] = ()
+    addressable_resolvers: tuple[str, ...] = ()
+    confirmed_addressable: bool = False
+    alias_status: str = "unknown"
+    a_observations: tuple[EncryptedDnsObservation, ...] = ()
+    aaaa_observations: tuple[EncryptedDnsObservation, ...] = ()
+
+
+@dataclass(frozen=True)
 class EncryptedDnsEvidence:
     """Bounded encrypted recursive fallback evidence for one zone."""
 
@@ -66,6 +84,7 @@ class EncryptedDnsEvidence:
     trigger: str
     attempted: bool
     rrsets: tuple[EncryptedDnsRrsetEvidence, ...] = ()
+    nameservers: tuple[EncryptedDnsNameserverEvidence, ...] = ()
     resolvers: tuple[tuple[str, str], ...] = DOH_RESOLVERS
 
 
@@ -126,6 +145,102 @@ def _requested_rdata(result: DnsQueryResult, qtype: str) -> tuple[str, ...]:
             if len(parts) == 5 and parts[3].upper() == target:
                 values.append(_normalize_rdata(target, parts[4]))
     return tuple(sorted(values))
+
+
+def _owner_rdata(
+    result: DnsQueryResult,
+    owner: str,
+    qtype: str,
+) -> tuple[str, ...]:
+    """Return only RDATA owned by ``owner`` from one encrypted DNS answer."""
+    owner_name = _normalize_name(owner)
+    target = str(qtype).upper()
+    values: list[str] = []
+    for rrset_text in result.answer_section:
+        for line in str(rrset_text).splitlines():
+            parts = line.split(None, 4)
+            if len(parts) != 5:
+                continue
+            row_owner, _ttl, _rdclass, row_type, rdata = parts
+            if _normalize_name(row_owner) != owner_name or row_type.upper() != target:
+                continue
+            values.append(_normalize_rdata(target, rdata))
+    return tuple(sorted(values))
+
+
+def _canonical_ip_values(values: tuple[str, ...], version: int) -> tuple[str, ...]:
+    found: set[str] = set()
+    for value in values:
+        try:
+            address = ipaddress.ip_address(str(value).strip())
+        except ValueError:
+            continue
+        if address.version == version:
+            found.add(str(address))
+    return tuple(sorted(found))
+
+
+def _nameserver_host_evidence(
+    name: str,
+    a_observations: tuple[EncryptedDnsObservation, ...],
+    aaaa_observations: tuple[EncryptedDnsObservation, ...],
+) -> EncryptedDnsNameserverEvidence:
+    """Summarize bounded DoH A/AAAA evidence without requiring geo-identical IP sets."""
+    normalized = _normalize_name(name)
+    ipv4: set[str] = set()
+    ipv6: set[str] = set()
+    cname_targets: set[str] = set()
+    addressable_resolvers: set[str] = set()
+    alias_resolvers: set[str] = set()
+
+    by_resolver: dict[str, list[EncryptedDnsObservation]] = {}
+    for observation in (*a_observations, *aaaa_observations):
+        by_resolver.setdefault(observation.resolver_name, []).append(observation)
+
+    for resolver_name, observations in by_resolver.items():
+        resolver_has_address = False
+        resolver_aliases: set[str] = set()
+        for observation in observations:
+            result = observation.result
+            a_values = _canonical_ip_values(_owner_rdata(result, normalized, "A"), 4)
+            aaaa_values = _canonical_ip_values(_owner_rdata(result, normalized, "AAAA"), 6)
+            aliases = tuple(
+                _normalize_name(value)
+                for value in _owner_rdata(result, normalized, "CNAME")
+                if _normalize_name(value)
+            )
+            ipv4.update(a_values)
+            ipv6.update(aaaa_values)
+            resolver_aliases.update(aliases)
+            if a_values or aaaa_values:
+                resolver_has_address = True
+        if resolver_has_address:
+            addressable_resolvers.add(resolver_name)
+        if resolver_aliases:
+            alias_resolvers.add(resolver_name)
+            cname_targets.update(resolver_aliases)
+
+    expected_resolvers = {name for name, _url in DOH_RESOLVERS}
+    confirmed_addressable = bool(expected_resolvers) and expected_resolvers <= addressable_resolvers
+
+    if confirmed_addressable and not cname_targets:
+        alias_status = "direct"
+    elif expected_resolvers and expected_resolvers <= alias_resolvers and cname_targets:
+        alias_status = "alias"
+    else:
+        alias_status = "unknown"
+
+    return EncryptedDnsNameserverEvidence(
+        name=normalized,
+        ipv4=tuple(sorted(ipv4)),
+        ipv6=tuple(sorted(ipv6)),
+        cname_targets=tuple(sorted(cname_targets)),
+        addressable_resolvers=tuple(sorted(addressable_resolvers)),
+        confirmed_addressable=confirmed_addressable,
+        alias_status=alias_status,
+        a_observations=a_observations,
+        aaaa_observations=aaaa_observations,
+    )
 
 
 def _doh_query(
@@ -327,12 +442,43 @@ def collect_encrypted_dns_evidence(
         rrsets.append(_consensus_for_qtype(qtype, observations))
 
     evidence = tuple(rrsets)
+    by_type = {item.qtype: item for item in evidence}
+    recovered_nameservers: list[EncryptedDnsNameserverEvidence] = []
+    ns_rrset = by_type.get("NS")
+    if ns_rrset is not None and ns_rrset.status == RRSET_CONSENSUS:
+        for nameserver in ns_rrset.rdata[:MAX_ENCRYPTED_NAMESERVER_HOSTS]:
+            name = _normalize_name(nameserver)
+            a_observations = tuple(
+                _doh_query(
+                    session,
+                    zone=name,
+                    qtype="A",
+                    resolver_name=resolver_name,
+                    resolver_url=resolver_url,
+                )
+                for resolver_name, resolver_url in DOH_RESOLVERS
+            )
+            aaaa_observations = tuple(
+                _doh_query(
+                    session,
+                    zone=name,
+                    qtype="AAAA",
+                    resolver_name=resolver_name,
+                    resolver_url=resolver_url,
+                )
+                for resolver_name, resolver_url in DOH_RESOLVERS
+            )
+            recovered_nameservers.append(
+                _nameserver_host_evidence(name, a_observations, aaaa_observations)
+            )
+
     return EncryptedDnsEvidence(
         zone=zone,
         status=_overall_status(evidence),
         trigger=trigger,
         attempted=True,
         rrsets=evidence,
+        nameservers=tuple(recovered_nameservers),
     )
 
 
@@ -349,6 +495,7 @@ def encrypted_dns_report_data(
             "transport": "https",
             "resolvers": [],
             "rrsets": {},
+            "nameservers": [],
         }
 
     rrsets = {}
@@ -374,6 +521,36 @@ def encrypted_dns_report_data(
             ],
         }
 
+    nameservers = []
+    for nameserver in evidence.nameservers:
+        observations = {}
+        for qtype, items in (("A", nameserver.a_observations), ("AAAA", nameserver.aaaa_observations)):
+            observations[qtype] = [
+                {
+                    "resolver": observation.resolver_name,
+                    "endpoint": observation.resolver_url,
+                    "state": observation.result.state.value,
+                    "rcode": observation.result.rcode,
+                    "authenticated_data": observation.authenticated_data,
+                    "error": observation.result.error,
+                    "rdata": list(_owner_rdata(observation.result, nameserver.name, qtype)),
+                    "cname": list(_owner_rdata(observation.result, nameserver.name, "CNAME")),
+                }
+                for observation in items
+            ]
+        nameservers.append(
+            {
+                "name": nameserver.name,
+                "confirmed_addressable": nameserver.confirmed_addressable,
+                "addressable_resolvers": list(nameserver.addressable_resolvers),
+                "ipv4": list(nameserver.ipv4),
+                "ipv6": list(nameserver.ipv6),
+                "alias_status": nameserver.alias_status,
+                "cname_targets": list(nameserver.cname_targets),
+                "observations": observations,
+            }
+        )
+
     report = {
         "status": evidence.status,
         "attempted": evidence.attempted,
@@ -386,10 +563,13 @@ def encrypted_dns_report_data(
             for name, url in evidence.resolvers
         ],
         "rrsets": rrsets,
+        "nameservers": nameservers,
         "scope": {
             "zone_level_only": True,
             "per_authoritative_server_attribution": False,
             "qtypes": list(ENCRYPTED_DNS_RRTYPES),
+            "nameserver_host_qtypes": list(ENCRYPTED_NS_HOST_RRTYPES),
+            "nameserver_host_limit": MAX_ENCRYPTED_NAMESERVER_HOSTS,
         },
     }
     if dnssec_validation is not None:
@@ -452,8 +632,11 @@ __all__ = [
     "DOH_RESOLVERS",
     "ENCRYPTED_DNS_BASE_RRTYPES",
     "ENCRYPTED_DNS_RRTYPES",
+    "ENCRYPTED_NS_HOST_RRTYPES",
+    "MAX_ENCRYPTED_NAMESERVER_HOSTS",
     "ENCRYPTED_DNS_USABLE",
     "EncryptedDnsEvidence",
+    "EncryptedDnsNameserverEvidence",
     "EncryptedDnsObservation",
     "EncryptedDnsRrsetEvidence",
     "EncryptedDnsScanMixin",
