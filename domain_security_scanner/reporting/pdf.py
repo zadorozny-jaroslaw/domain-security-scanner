@@ -813,7 +813,10 @@ def generate_pdf(report: dict[str, Any], output: Path):
 
     show_inventory = "discovery" in selected_scan_group_set
     show_dns_appendix = bool({"domain", "discovery"} & selected_scan_group_set)
-    if show_inventory or show_dns_appendix:
+    # Discovery inventory remains a deliberate section boundary. For a
+    # domain-only report, let DNS posture and the DNS appendix flow naturally
+    # so a short posture table does not occupy an otherwise empty page.
+    if show_inventory:
         story.append(PageBreak())
 
     inventory = None

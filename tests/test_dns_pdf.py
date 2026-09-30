@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from domain_security_scanner.reporting.dns_pdf import dns_posture_rows
 from domain_security_scanner.reporting.pdf import generate_pdf
@@ -129,7 +130,14 @@ class DnsPdfRenderTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "report.pdf"
-            generate_pdf(report, output)
+            # A domain-only report must not force a new page between the compact
+            # DNS posture summary and the DNS appendix. ReportLab may still
+            # paginate naturally when content requires it.
+            with patch(
+                "domain_security_scanner.reporting.pdf.PageBreak",
+                side_effect=AssertionError("domain-only DNS flow forced a PageBreak"),
+            ):
+                generate_pdf(report, output)
             self.assertTrue(output.exists())
             self.assertGreater(output.stat().st_size, 4000)
             self.assertEqual(output.read_bytes()[:4], b"%PDF")
