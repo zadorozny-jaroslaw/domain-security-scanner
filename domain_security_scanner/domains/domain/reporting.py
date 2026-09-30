@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from .dns_reconciliation import reconcile_delegation
-from .dns_path_integrity import assess_direct_dns_result, summarize_authoritative_path
+from .dns_path_integrity import assess_direct_dns_result, summarize_dns_path
 
 
 def _enum_value(value: Any) -> Any:
@@ -349,7 +349,7 @@ def dns_infrastructure_report_data(
         authoritative_dns_analysis,
     )
     return {
-        "path_integrity": summarize_authoritative_path(authoritative_dns),
+        "path_integrity": summarize_dns_path(delegation, authoritative_dns),
         "delegation": delegation_report_data(
             delegation,
             delegation_analysis,

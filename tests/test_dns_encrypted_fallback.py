@@ -8,6 +8,7 @@ import dns.message
 import dns.rdatatype
 import dns.rrset
 
+from domain_security_scanner.domains.domain.dns_path_integrity import summarize_dns_path
 from domain_security_scanner.domains.domain.encrypted_dns import (
     ENCRYPTED_DNS_DISAGREEMENT,
     ENCRYPTED_DNS_USABLE,
@@ -114,6 +115,36 @@ def _authoritative_evidence(*, suspect: bool):
     return SimpleNamespace(zone="example.com", servers=(server,))
 
 
+def _suspect_delegation_evidence():
+    result = DnsQueryResult(
+        "example.com",
+        "NS",
+        DnsQueryState.NOT_AUTHORITATIVE,
+        query_mode=DnsQueryMode.AUTHORITATIVE,
+        transport=DnsTransport.UDP,
+        server_name="a.gtld-servers.net",
+        server_ip="192.0.2.1",
+        rcode="NOERROR",
+        aa=False,
+        rd=False,
+        ra=True,
+        answer_section=(),
+        authority_section=(
+            "com. 300 IN NS a.gtld-servers.net.\n"
+            "com. 300 IN NS b.gtld-servers.net.",
+        ),
+    )
+    return SimpleNamespace(
+        zone="example.com",
+        delegation_queries=(result,),
+        delegated_servers=(),
+    )
+
+
+def _empty_authoritative_evidence():
+    return SimpleNamespace(zone="example.com", servers=())
+
+
 def _answers(*, disagreement: bool = False, ttl_difference: bool = False):
     cloudflare = "https://cloudflare-dns.com/dns-query"
     google = "https://dns.google/dns-query"
@@ -141,6 +172,35 @@ class EncryptedDnsFallbackTest(unittest.TestCase):
         )
         self.assertFalse(needed)
         self.assertEqual(status, "usable")
+
+    def test_fallback_triggers_from_suspect_parent_delegation_when_authoritative_is_empty(self):
+        delegation = _suspect_delegation_evidence()
+        authoritative = _empty_authoritative_evidence()
+
+        needed, status = encrypted_dns_fallback_needed(authoritative, delegation)
+
+        self.assertTrue(needed)
+        self.assertEqual(status, "suspected_interception")
+        path = summarize_dns_path(delegation, authoritative)
+        self.assertEqual(path["status"], "suspected_interception")
+        self.assertEqual(path["basis"], "direct_delegation_queries")
+        self.assertEqual(len(path["observations"]), 1)
+
+    def test_doh_runs_when_interception_blocks_parent_delegation_before_issue15(self):
+        scanner = SimpleNamespace(
+            root_domain="example.com",
+            session=_FakeDohSession(_answers()),
+        )
+        evidence = collect_encrypted_dns_evidence(
+            scanner,
+            _empty_authoritative_evidence(),
+            _suspect_delegation_evidence(),
+        )
+
+        self.assertTrue(evidence.attempted)
+        self.assertEqual(evidence.status, ENCRYPTED_DNS_USABLE)
+        self.assertEqual(evidence.trigger, "suspected_interception")
+        self.assertEqual(len(scanner.session.calls), 4)
 
     def test_two_doh_resolvers_reach_zone_level_consensus(self):
         scanner = SimpleNamespace(

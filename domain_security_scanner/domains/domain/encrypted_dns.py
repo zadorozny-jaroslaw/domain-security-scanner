@@ -12,7 +12,7 @@ from ...models import DnsQueryMode, DnsQueryResult, DnsQueryState
 from .dns_path_integrity import (
     DIRECT_PATH_MIXED,
     DIRECT_PATH_SUSPECTED_INTERCEPTION,
-    summarize_authoritative_path,
+    summarize_dns_path,
 )
 
 DOH_TIMEOUT = 3.0
@@ -271,8 +271,11 @@ def _overall_status(rrsets: tuple[EncryptedDnsRrsetEvidence, ...]) -> str:
     return ENCRYPTED_DNS_UNAVAILABLE
 
 
-def encrypted_dns_fallback_needed(authoritative_dns: Any) -> tuple[bool, str]:
-    path = summarize_authoritative_path(authoritative_dns)
+def encrypted_dns_fallback_needed(
+    authoritative_dns: Any,
+    delegation: Any = None,
+) -> tuple[bool, str]:
+    path = summarize_dns_path(delegation, authoritative_dns)
     status = str(path.get("status") or "unknown")
     return status in {
         DIRECT_PATH_SUSPECTED_INTERCEPTION,
@@ -280,13 +283,18 @@ def encrypted_dns_fallback_needed(authoritative_dns: Any) -> tuple[bool, str]:
     }, status
 
 
-def collect_encrypted_dns_evidence(scanner, authoritative_dns: Any) -> EncryptedDnsEvidence:
+def collect_encrypted_dns_evidence(
+    scanner,
+    authoritative_dns: Any,
+    delegation: Any = None,
+) -> EncryptedDnsEvidence:
     """Collect SOA/NS consensus over HTTPS only when direct DNS attribution is suspect."""
     zone = _normalize_name(
         getattr(authoritative_dns, "zone", None)
+        or getattr(delegation, "zone", None)
         or getattr(scanner, "root_domain", "")
     )
-    needed, trigger = encrypted_dns_fallback_needed(authoritative_dns)
+    needed, trigger = encrypted_dns_fallback_needed(authoritative_dns, delegation)
     if not needed or not zone:
         return EncryptedDnsEvidence(
             zone=zone,
@@ -415,6 +423,7 @@ class EncryptedDnsScanMixin:
         self.encrypted_dns = collect_encrypted_dns_evidence(
             self,
             getattr(self, "authoritative_dns", None),
+            getattr(self, "delegation", None),
         )
         result = super().collect_domain_dns()
         finding = encrypted_dns_finding(self.encrypted_dns)

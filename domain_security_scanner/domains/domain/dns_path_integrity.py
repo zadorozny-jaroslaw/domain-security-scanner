@@ -201,6 +201,116 @@ def summarize_authoritative_path(evidence: Any) -> dict[str, Any]:
     }
 
 
+def summarize_delegation_path(evidence: Any) -> dict[str, Any]:
+    """Summarize direct parent/child delegation query path integrity.
+
+    This catches interception that prevents issue #14 from ever producing
+    delegated-server evidence. In that case issue #15 has no SOA endpoints to
+    summarize, so the fallback trigger must still be able to use the earlier
+    direct delegation probes.
+    """
+    observations: list[dict[str, Any]] = []
+    assessments: list[DirectDnsPathAssessment] = []
+
+    def add(result: Any, stage: str) -> None:
+        assessment = assess_direct_dns_result(result)
+        assessments.append(assessment)
+        observations.append(
+            {
+                "stage": stage,
+                "server_name": getattr(result, "server_name", None),
+                "server_ip": getattr(result, "server_ip", None),
+                "transport": _enum_value(getattr(result, "transport", None)),
+                "qtype": getattr(result, "qtype", getattr(result, "rtype", None)),
+                "status": assessment.status,
+                "signals": list(assessment.signals),
+            }
+        )
+
+    for result in tuple(getattr(evidence, "delegation_queries", ()) or ()):
+        add(result, "parent_delegation")
+    for server in tuple(getattr(evidence, "delegated_servers", ()) or ()):
+        for result in tuple(getattr(server, "authority_queries", ()) or ()):
+            add(result, "child_authority")
+
+    signals = sorted(
+        {signal for assessment in assessments for signal in assessment.signals}
+    )
+    return {
+        "status": _aggregate_status(tuple(assessments)),
+        "basis": "direct_delegation_queries",
+        "signals": signals,
+        "observations": observations,
+    }
+
+
+def summarize_dns_path(delegation: Any, authoritative_evidence: Any) -> dict[str, Any]:
+    """Combine issue #14 and issue #15 direct-path integrity observations.
+
+    The authoritative SOA view remains preferred when it exists, but a suspect
+    parent/child delegation path must not disappear merely because interception
+    prevented authoritative endpoint evidence from being built.
+    """
+    authoritative = summarize_authoritative_path(authoritative_evidence)
+    delegation_summary = summarize_delegation_path(delegation)
+
+    combined_observations = [
+        *delegation_summary.get("observations", []),
+        *authoritative.get("observations", []),
+    ]
+    combined_assessments = tuple(
+        DirectDnsPathAssessment(
+            str(item.get("status") or DIRECT_PATH_UNKNOWN),
+            tuple(item.get("signals", ()) or ()),
+        )
+        for item in combined_observations
+    )
+    if not combined_observations:
+        return authoritative
+
+    signals = sorted(
+        {
+            signal
+            for assessment in combined_assessments
+            for signal in assessment.signals
+        }
+    )
+    authoritative_count = len(authoritative.get("observations", []))
+    delegation_count = len(delegation_summary.get("observations", []))
+    if authoritative_count and delegation_count:
+        basis = "direct_delegation_and_authoritative"
+    elif delegation_count:
+        basis = "direct_delegation_queries"
+    else:
+        basis = "direct_authoritative_soa"
+
+    by_transport: dict[str, list[DirectDnsPathAssessment]] = {"udp": [], "tcp": []}
+    for item in combined_observations:
+        transport = str(item.get("transport") or "").lower()
+        if transport not in by_transport:
+            continue
+        by_transport[transport].append(
+            DirectDnsPathAssessment(
+                str(item.get("status") or DIRECT_PATH_UNKNOWN),
+                tuple(item.get("signals", ()) or ()),
+            )
+        )
+
+    return {
+        "status": _aggregate_status(combined_assessments),
+        "basis": basis,
+        "transports": {
+            name: {
+                "status": _aggregate_status(tuple(values)),
+                "observations": len(values),
+            }
+            for name, values in by_transport.items()
+        },
+        "signals": signals,
+        "observations": combined_observations,
+    }
+
+
 __all__ = [
     "DIRECT_PATH_MIXED",
     "DIRECT_PATH_PARTIAL",
@@ -210,4 +320,6 @@ __all__ = [
     "DirectDnsPathAssessment",
     "assess_direct_dns_result",
     "summarize_authoritative_path",
+    "summarize_delegation_path",
+    "summarize_dns_path",
 ]
