@@ -38,6 +38,8 @@ When the `domain` group is selected, bounded DNS work can:
 
 The scanner also evaluates direct-DNS path integrity. Signals such as unexpected recursion availability on RD=0 requests combined with referral-like or wrong-owner responses can mark the path as suspected interception/rewriting. Suspect responses are not treated as proof of the intended server's behavior.
 
+For troubleshooting examples covering forced DNS redirection, Pi-hole/router/VPN interception, SOA/DNSSEC interpretation, and report diagnostics, see [DNS_TROUBLESHOOTING.md](DNS_TROUBLESHOOTING.md).
+
 These direct requests can therefore be visible not only to the authorized domain's authoritative DNS provider but also to the relevant parent-zone authoritative infrastructure. They remain deliberately small and server-specific.
 
 Direct-authoritative support does not perform zone transfers, amplification measurement, malformed-packet testing, DNS fuzzing, or high-volume DNS probing.
@@ -64,6 +66,8 @@ The fallback is bounded and zone-level. It can request SOA, NS, DS, and DNSKEY m
 The scanner requires independent agreement for recovered RRsets and performs its own local DNSSEC checks before promoting a DNSSEC result to `secure`; it does not rely on a single provider's AD flag as proof. Encrypted recursive evidence is explicitly labelled as such and is not presented as a response from a specific authoritative server.
 
 The fallback is intended to preserve useful evidence when a local router, Pi-hole enforcement rule, VPN, firewall, or ISP transparently redirects port 53. If direct per-server attribution is unavailable, transport, EDNS, SOA-serial consistency, negative-DNS, and open-recursion checks for a particular authoritative server remain `VERIFY`/informational rather than being inferred from DoH.
+
+For practical interpretation of this condition, including the difference between merely using Pi-hole as the configured resolver and forcibly redirecting all port-53 traffic, see [DNS_TROUBLESHOOTING.md](DNS_TROUBLESHOOTING.md).
 
 ### IANA RDAP bootstrap
 

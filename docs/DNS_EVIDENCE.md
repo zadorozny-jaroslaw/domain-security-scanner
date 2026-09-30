@@ -70,6 +70,7 @@ The shared state model distinguishes:
 Only `no_answer` and `nxdomain` are treated as record absence. Timeout,
 SERVFAIL, non-authoritative, truncated, transport-error, and generic error
 states are unavailable/inconclusive evidence.
+
 ## Direct-path integrity and encrypted recovery
 
 v1.3 also evaluates whether direct responses can be trusted as coming from the
@@ -91,6 +92,9 @@ authoritative checks, the fallback cannot turn per-server transport, EDNS,
 SOA-serial consistency, negative-DNS, or open-recursion uncertainty into a
 server-specific pass.
 
+For operator-facing examples, interpretation guidance, and diagnostics for
+Pi-hole/router/VPN/ISP DNS rewriting, see
+[DNS_TROUBLESHOOTING.md](DNS_TROUBLESHOOTING.md).
 
 ## Authoritative-query behavior
 
