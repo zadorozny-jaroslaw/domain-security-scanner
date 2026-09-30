@@ -153,6 +153,7 @@ class ParsingTest(unittest.TestCase):
             apex_ns_from_result(result, "example.com"),
             ("ns1.example.net", "ns2.example.net"),
         )
+
     def test_apex_ns_accepts_authoritative_rrset_from_authority_section(self):
         result = DnsQueryResult(
             "example.com",
@@ -289,6 +290,7 @@ class CollectionTest(unittest.TestCase):
             evidence.servers[0].endpoints[0].udp_soa.soa.serial,
             1,
         )
+
     def test_apex_ns_falls_back_to_tcp_when_udp_is_not_authoritative(self):
         server = DelegatedNameserverEvidence(
             name="ns1.example.net",
@@ -453,6 +455,62 @@ class CollectionFailureTest(unittest.TestCase):
             harness.authoritative_dns.servers[0].probe_addresses,
             ("192.0.2.54",),
         )
+
+    def test_inconclusive_primary_prefers_same_family_fallback(self):
+        server = DelegatedNameserverEvidence(
+            name="ns1.example.net",
+            addresses=NameserverAddressEvidence(name="ns1.example.net"),
+            candidate_addresses=(
+                "192.0.2.53",
+                "192.0.2.54",
+                "2001:db8::53",
+            ),
+        )
+        delegation = ParentDelegationEvidence(
+            zone="example.com",
+            parent_zone="com",
+            delegated_servers=(server,),
+        )
+
+        class Harness(_CollectionHarness):
+            def authoritative_dns_query_result(self, host, rtype, **kwargs):
+                if kwargs["server_ip"] == "192.0.2.53":
+                    transport = DnsTransport(kwargs.get("transport", DnsTransport.UDP))
+                    self.calls.append(
+                        (
+                            host,
+                            rtype,
+                            kwargs.get("server_name"),
+                            kwargs["server_ip"],
+                            transport,
+                            kwargs.get("edns_version"),
+                            kwargs.get("edns_payload"),
+                        )
+                    )
+                    return DnsQueryResult(
+                        host,
+                        rtype,
+                        DnsQueryState.NOT_AUTHORITATIVE,
+                        query_mode=DnsQueryMode.AUTHORITATIVE,
+                        transport=transport,
+                        server_name=kwargs.get("server_name"),
+                        server_ip=kwargs["server_ip"],
+                        rcode="NOERROR",
+                        aa=False,
+                    )
+                return super().authoritative_dns_query_result(host, rtype, **kwargs)
+
+        harness = Harness(delegation)
+        harness.collect_domain_dns()
+        evidence = harness.authoritative_dns.servers[0]
+
+        self.assertEqual(evidence.probe_addresses, ("192.0.2.53", "192.0.2.54"))
+        self.assertEqual(evidence.endpoints[1].udp_soa.soa.serial, 1)
+        self.assertEqual(
+            evidence.apex_nameservers,
+            ("ns1.example.net", "ns2.example.net"),
+        )
+        self.assertIn("2001:db8::53", evidence.unprobed_addresses)
 
 
 if __name__ == "__main__":

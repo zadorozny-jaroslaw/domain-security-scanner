@@ -10,6 +10,12 @@ import dns.query
 import dns.rrset
 
 from domain_security_scanner.dns_evidence import DnsEvidenceMixin
+from domain_security_scanner.domains.domain.authoritative import (
+    AuthoritativeEndpointEvidence,
+    AuthoritativeServerEvidence,
+    SoaObservation,
+    SoaRecord,
+)
 from domain_security_scanner.domains.domain.negative_dns import (
     NEGATIVE_DNS_PROBE_COUNT,
     NegativeDnsEvidenceCollectorMixin,
@@ -19,6 +25,7 @@ from domain_security_scanner.models import (
     DnsQueryMode,
     DnsQueryResult,
     DnsQueryState,
+    DnsTransport,
 )
 
 
@@ -51,7 +58,7 @@ class _CollectorHarness(NegativeDnsEvidenceCollectorMixin):
         )
 
 
-class DnsIssue19EvidenceTests(unittest.TestCase):
+class NegativeDnsEvidenceTests(unittest.TestCase):
     def test_cache_key_separates_recursion_desired_profile(self):
         base = dict(
             qname="Example.COM.",
@@ -204,6 +211,73 @@ class DnsIssue19EvidenceTests(unittest.TestCase):
         self.assertIsNone(evidence.servers[0].server_ip)
         self.assertEqual(evidence.servers[0].negative_results, ())
         self.assertIsNone(evidence.servers[0].recursion_result)
+
+    def test_negative_probe_prefers_endpoint_with_positive_authoritative_soa(self):
+        bad_result = DnsQueryResult(
+            "target.test",
+            "SOA",
+            DnsQueryState.NOT_AUTHORITATIVE,
+            query_mode=DnsQueryMode.AUTHORITATIVE,
+            transport=DnsTransport.UDP,
+            server_name="ns1.target.test",
+            server_ip="192.0.2.53",
+            rcode="NOERROR",
+            aa=False,
+        )
+        good_result = DnsQueryResult(
+            "target.test",
+            "SOA",
+            DnsQueryState.ANSWER,
+            query_mode=DnsQueryMode.AUTHORITATIVE,
+            transport=DnsTransport.UDP,
+            server_name="ns1.target.test",
+            server_ip="192.0.2.54",
+            rcode="NOERROR",
+            aa=True,
+            answer_section=(
+                "target.test. 300 IN SOA ns1.target.test. hostmaster.target.test. "
+                "42 3600 600 86400 300",
+            ),
+        )
+        good_soa = SoaRecord(
+            mname="ns1.target.test",
+            rname="hostmaster.target.test",
+            serial=42,
+            refresh=3600,
+            retry=600,
+            expire=86400,
+            minimum=300,
+        )
+        server = AuthoritativeServerEvidence(
+            name="ns1.target.test",
+            candidate_addresses=("192.0.2.53", "192.0.2.54"),
+            probe_addresses=("192.0.2.53", "192.0.2.54"),
+            unprobed_addresses=(),
+            endpoints=(
+                AuthoritativeEndpointEvidence(
+                    server_name="ns1.target.test",
+                    server_ip="192.0.2.53",
+                    udp_soa=SoaObservation(bad_result),
+                    tcp_soa=SoaObservation(bad_result),
+                ),
+                AuthoritativeEndpointEvidence(
+                    server_name="ns1.target.test",
+                    server_ip="192.0.2.54",
+                    udp_soa=SoaObservation(good_result, soa=good_soa),
+                    tcp_soa=SoaObservation(good_result, soa=good_soa),
+                ),
+            ),
+        )
+
+        endpoint = NegativeDnsEvidenceCollectorMixin._negative_dns_primary_endpoint(server)
+
+        self.assertEqual(endpoint, "192.0.2.54")
+        self.assertTrue(
+            NegativeDnsEvidenceCollectorMixin._negative_dns_authority_confirmed(
+                server,
+                endpoint,
+            )
+        )
 
     def test_recursion_probe_name_is_outside_assessed_zone(self):
         harness = _CollectorHarness()

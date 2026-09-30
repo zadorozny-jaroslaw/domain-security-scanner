@@ -14,6 +14,7 @@ from domain_security_scanner.domains.domain.dnssec import (
     DNSSEC_EDNS_PAYLOAD,
     DnssecEvidenceCollectorMixin,
     dnssec_child_endpoints,
+    dnssec_parent_endpoints,
 )
 from domain_security_scanner.models import (
     DnsQueryMode,
@@ -156,6 +157,57 @@ class DnssecCollectorTest(unittest.TestCase):
             ),
         )
 
+    def test_parent_endpoint_selection_spreads_across_parent_servers(self):
+        delegation = SimpleNamespace(
+            source_server_name="a.parent.test",
+            source_server_ip="192.0.2.1",
+            parent_server_addresses=(
+                SimpleNamespace(
+                    name="a.parent.test",
+                    addresses=("192.0.2.1", "192.0.2.11"),
+                ),
+                SimpleNamespace(
+                    name="b.parent.test",
+                    addresses=("192.0.2.2", "192.0.2.12"),
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            dnssec_parent_endpoints(delegation, limit=3),
+            (
+                ("a.parent.test", "192.0.2.1"),
+                ("b.parent.test", "192.0.2.2"),
+                ("a.parent.test", "192.0.2.11"),
+            ),
+        )
+
+    def test_child_endpoint_fallback_is_breadth_first_across_nameservers(self):
+        delegation = SimpleNamespace(
+            delegated_servers=(
+                SimpleNamespace(
+                    name="ns1.example.net",
+                    candidate_addresses=("192.0.2.53", "192.0.2.54"),
+                    authority_queries=(),
+                ),
+                SimpleNamespace(
+                    name="ns2.example.net",
+                    candidate_addresses=("192.0.2.63", "192.0.2.64"),
+                    authority_queries=(),
+                ),
+            )
+        )
+
+        self.assertEqual(
+            dnssec_child_endpoints(delegation, limit=4),
+            (
+                ("ns1.example.net", "192.0.2.53"),
+                ("ns2.example.net", "192.0.2.63"),
+                ("ns1.example.net", "192.0.2.54"),
+                ("ns2.example.net", "192.0.2.64"),
+            ),
+        )
+
     def test_collector_requests_parent_ds_dnskey_and_deterministic_apex_rrsets(self):
         delegation = _delegation()
         responses = {
@@ -185,6 +237,55 @@ class DnssecCollectorTest(unittest.TestCase):
             self.assertTrue(kwargs["want_dnssec"])
             self.assertEqual(kwargs["edns_version"], 0)
             self.assertEqual(kwargs["edns_payload"], DNSSEC_EDNS_PAYLOAD)
+
+    def test_parent_ds_falls_back_after_non_authoritative_source(self):
+        delegation = SimpleNamespace(
+            zone="example.com",
+            source_server_name="a.parent.test",
+            source_server_ip="192.0.2.1",
+            parent_server_addresses=(
+                SimpleNamespace(name="a.parent.test", addresses=("192.0.2.1",)),
+                SimpleNamespace(name="b.parent.test", addresses=("192.0.2.2",)),
+            ),
+            delegated_servers=(
+                SimpleNamespace(
+                    name="ns1.example.net",
+                    candidate_addresses=("192.0.2.53",),
+                    authority_queries=(),
+                ),
+            ),
+        )
+        responses = {
+            ("a.parent.test", "192.0.2.1", "DS", DnsTransport.UDP): _result(
+                "DS",
+                state=DnsQueryState.NOT_AUTHORITATIVE,
+                server_name="a.parent.test",
+                server_ip="192.0.2.1",
+                aa=False,
+            ),
+            ("b.parent.test", "192.0.2.2", "DS", DnsTransport.UDP): _result(
+                "DS", server_name="b.parent.test", server_ip="192.0.2.2"
+            ),
+            ("ns1.example.net", "192.0.2.53", "DNSKEY", DnsTransport.UDP): _result(
+                "DNSKEY"
+            ),
+            ("ns1.example.net", "192.0.2.53", "SOA", DnsTransport.UDP): _result(
+                "SOA"
+            ),
+            ("ns1.example.net", "192.0.2.53", "NS", DnsTransport.UDP): _result(
+                "NS"
+            ),
+        }
+        harness = _CollectorHarness(responses)
+
+        evidence = harness.collect_dnssec_evidence(delegation)
+
+        self.assertEqual(evidence.parent_ds.server_name, "b.parent.test")
+        self.assertEqual(len(evidence.parent_ds_attempts), 2)
+        self.assertEqual(
+            [call[2]["server_ip"] for call in harness.calls[:2]],
+            ["192.0.2.1", "192.0.2.2"],
+        )
 
     def test_unsigned_parent_ds_short_circuits_child_dnssec_queries(self):
         delegation = _delegation()
@@ -239,6 +340,55 @@ class DnssecCollectorTest(unittest.TestCase):
         self.assertEqual(len(evidence.dnskey_attempts), 2)
         self.assertEqual(evidence.selected_dnskey.server_name, "ns2.example.net")
         self.assertEqual(evidence.selected_dnskey.server_ip, "192.0.2.54")
+
+    def test_apex_rrsets_can_fall_back_independently_of_dnskey_endpoint(self):
+        delegation = SimpleNamespace(
+            zone="example.com",
+            source_server_name="a.parent.test",
+            source_server_ip="192.0.2.1",
+            parent_server_addresses=(),
+            delegated_servers=(
+                SimpleNamespace(
+                    name="ns1.example.net",
+                    candidate_addresses=("192.0.2.53",),
+                    authority_queries=(),
+                ),
+                SimpleNamespace(
+                    name="ns2.example.net",
+                    candidate_addresses=("192.0.2.54",),
+                    authority_queries=(),
+                ),
+            ),
+        )
+        responses = {
+            ("a.parent.test", "192.0.2.1", "DS", DnsTransport.UDP): _result(
+                "DS", server_name="a.parent.test", server_ip="192.0.2.1"
+            ),
+            ("ns1.example.net", "192.0.2.53", "DNSKEY", DnsTransport.UDP): _result(
+                "DNSKEY"
+            ),
+            ("ns1.example.net", "192.0.2.53", "SOA", DnsTransport.UDP): _result(
+                "SOA", state=DnsQueryState.NOT_AUTHORITATIVE, aa=False
+            ),
+            ("ns2.example.net", "192.0.2.54", "SOA", DnsTransport.UDP): _result(
+                "SOA", server_name="ns2.example.net", server_ip="192.0.2.54"
+            ),
+            ("ns1.example.net", "192.0.2.53", "NS", DnsTransport.UDP): _result(
+                "NS", state=DnsQueryState.NOT_AUTHORITATIVE, aa=False
+            ),
+            ("ns2.example.net", "192.0.2.54", "NS", DnsTransport.UDP): _result(
+                "NS", server_name="ns2.example.net", server_ip="192.0.2.54"
+            ),
+        }
+        harness = _CollectorHarness(responses)
+
+        evidence = harness.collect_dnssec_evidence(delegation)
+
+        self.assertEqual(evidence.selected_dnskey.server_name, "ns1.example.net")
+        self.assertEqual(
+            [(item.qtype, item.server_name) for item in evidence.apex_rrsets],
+            [("SOA", "ns2.example.net"), ("NS", "ns2.example.net")],
+        )
 
     def test_truncated_dnssec_query_has_one_explicit_tcp_fallback(self):
         delegation = _delegation()

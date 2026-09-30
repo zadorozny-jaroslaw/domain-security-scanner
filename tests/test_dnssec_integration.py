@@ -4,6 +4,7 @@ import unittest
 
 from domain_security_scanner.domains.domain.dnssec import (
     DnssecEvidence,
+    DnssecQueryEvidence,
     DnssecScanMixin,
     dnssec_report_data,
 )
@@ -12,6 +13,15 @@ from domain_security_scanner.domains.domain.dnssec_analysis import (
     DnssecState,
     DnssecStepOutcome,
     DnssecValidationStep,
+)
+from domain_security_scanner.domains.domain.dnssec_denial_analysis import (
+    analyze_dnssec_denial,
+)
+from domain_security_scanner.domains.domain.dnssec_findings import (
+    build_dnssec_findings,
+)
+from domain_security_scanner.domains.domain.dnssec_posture_analysis import (
+    analyze_dnssec_algorithm_posture,
 )
 from domain_security_scanner.models import (
     DnsQueryMode,
@@ -39,6 +49,42 @@ class _DnssecHarness(DnssecScanMixin, _TailMixin):
 
     def add_check(self, *args):
         self.checks.append(args)
+
+
+def _authoritative_result(
+    qname: str,
+    qtype: str,
+    *,
+    answer=(),
+    authority=(),
+    state=DnsQueryState.ANSWER,
+    rcode="NOERROR",
+):
+    return DnsQueryResult(
+        qname,
+        qtype,
+        state,
+        query_mode=DnsQueryMode.AUTHORITATIVE,
+        transport=DnsTransport.UDP,
+        server_name="ns1.example.net",
+        server_ip="192.0.2.53",
+        rcode=rcode,
+        aa=True,
+        answer_section=tuple(answer),
+        authority_section=tuple(authority),
+        request_edns_version=0,
+        request_edns_payload=1232,
+        request_want_dnssec=True,
+    )
+
+
+def _query_evidence(qtype: str, result: DnsQueryResult):
+    return DnssecQueryEvidence(
+        qtype=qtype,
+        server_name=result.server_name,
+        server_ip=result.server_ip,
+        udp_result=result,
+    )
 
 
 class DnssecIntegrationTest(unittest.TestCase):
@@ -73,8 +119,6 @@ class DnssecIntegrationTest(unittest.TestCase):
             ),
             request_want_dnssec=True,
         )
-        from domain_security_scanner.domains.domain.dnssec import DnssecQueryEvidence
-
         evidence = DnssecEvidence(
             zone="example.com",
             parent_ds=DnssecQueryEvidence(
@@ -117,6 +161,87 @@ class DnssecIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(report["scope"]["validated_rrsets"], ["DNSKEY"])
         self.assertEqual(report["scope"]["denial_probe_limit"], 1)
+
+    def test_report_exposes_policy_and_denial_posture_without_probe_name(self):
+        parent = _query_evidence(
+            "DS",
+            _authoritative_result(
+                "example.com",
+                "DS",
+                answer=("example.com. 300 IN DS 12345 13 2 AABBCCDD",),
+            ),
+        )
+        dnskey = _query_evidence(
+            "DNSKEY",
+            _authoritative_result(
+                "example.com",
+                "DNSKEY",
+                answer=("example.com. 300 IN DNSKEY 257 3 13 AQIDBA==",),
+            ),
+        )
+        denial = _query_evidence(
+            "A",
+            _authoritative_result(
+                "dssnx0-deadbeef.example.com",
+                "A",
+                state=DnsQueryState.NXDOMAIN,
+                authority=(
+                    "ABC.example.com. 300 IN NSEC3 1 0 0 - DEF A NS SOA RRSIG",
+                ),
+                rcode="NXDOMAIN",
+            ),
+        )
+        evidence = DnssecEvidence(
+            zone="example.com",
+            parent_ds=parent,
+            dnskey_attempts=(dnskey,),
+            selected_dnskey=dnskey,
+            denial_probe=denial,
+        )
+        report = dnssec_report_data(
+            evidence,
+            DnssecAnalysis(state=DnssecState.UNKNOWN, reason="fixture"),
+            analyze_dnssec_algorithm_posture(evidence),
+            analyze_dnssec_denial(evidence),
+        )
+
+        self.assertEqual(report["algorithm_policy"]["status"], "recommended")
+        self.assertEqual(
+            report["algorithm_policy"]["snapshot_version"],
+            "2026-08-10-iana-dnssec-policy",
+        )
+        self.assertEqual(report["denial"]["mechanism"], "nsec3")
+        self.assertEqual(report["denial"]["posture"], "current")
+        self.assertTrue(report["queries"]["denial_probe"]["want_dnssec"])
+        self.assertNotIn("qname", report["queries"]["denial_probe"])
+        self.assertNotIn("dssnx0-deadbeef", str(report))
+
+    def test_unknown_dnssec_finding_keeps_independent_signing_context(self):
+        dnskey = _query_evidence(
+            "DNSKEY",
+            _authoritative_result(
+                "example.com",
+                "DNSKEY",
+                answer=("example.com. 300 IN DNSKEY 257 3 13 AQIDBA==",),
+            ),
+        )
+        evidence = DnssecEvidence(
+            zone="example.com",
+            selected_dnskey=dnskey,
+            dnskey_attempts=(dnskey,),
+        )
+        finding = build_dnssec_findings(
+            evidence,
+            DnssecAnalysis(state=DnssecState.UNKNOWN, reason="fixture"),
+            rdap={"secureDNS": {"delegationSigned": True}},
+            dns_records={"example.com": {"DS": ["12345 13 2 AABB"]}},
+        )[0]
+
+        self.assertEqual(finding.status, "unknown")
+        self.assertFalse(finding.applicable)
+        self.assertIn("RDAP wskazuje podpisaną delegację", finding.message)
+        self.assertIn("autorytatywny DNSKEY", finding.message)
+        self.assertIn("nie wpływa na scoring", finding.message)
 
     def test_unsigned_report_has_targets_but_no_validated_rrsets(self):
         analysis = DnssecAnalysis(

@@ -183,6 +183,27 @@ class AuthoritativeAnalysisTest(unittest.TestCase):
         findings = _findings(analysis, evidence)
         self.assertEqual(findings["Authoritative SOA service"].status, "fail")
 
+    def test_no_usable_soa_is_verify_not_warning(self):
+        server = _server(
+            "ns1.example.net",
+            "192.0.2.53",
+            udp_state=DnsQueryState.ERROR,
+            udp_rcode="NOERROR",
+            udp_aa=True,
+            tcp_state=DnsQueryState.ERROR,
+            tcp_rcode="NOERROR",
+            tcp_aa=True,
+            edns_state=DnsQueryState.ERROR,
+            edns_rcode="NOERROR",
+            edns_aa=True,
+        )
+        evidence = AuthoritativeDnsEvidence(zone="example.com", servers=(server,))
+        analysis = analyze_authoritative_dns(evidence)
+        finding = _findings(analysis, evidence)["Authoritative SOA service"]
+
+        self.assertEqual(finding.status, "unknown")
+        self.assertFalse(finding.applicable)
+
     def test_serial_skew_is_advisory_and_independent_from_configuration(self):
         evidence = AuthoritativeDnsEvidence(
             zone="example.com",

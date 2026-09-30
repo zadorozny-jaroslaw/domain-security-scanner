@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from domain_security_scanner.domains.domain.delegation import ParentDelegationEvidence
 from domain_security_scanner.domains.domain.delegation_analysis import (
@@ -21,12 +22,16 @@ from domain_security_scanner.domains.domain.delegation_analysis import (
 from domain_security_scanner.domains.domain.delegation_findings import (
     build_delegation_findings,
 )
+from domain_security_scanner.domains.domain.dns_reconciliation import (
+    reconcile_delegation,
+)
 from domain_security_scanner.domains.domain.dns_scoring import (
     DELEGATED_AUTHORITY_WEIGHT,
     DELEGATION_CONSISTENCY_WEIGHT,
     NAME_SERVER_REDUNDANCY_WEIGHT,
     NAMESERVER_ADDRESSABILITY_WEIGHT,
 )
+from domain_security_scanner.domains.domain.reporting import delegation_report_data
 
 
 def _evidence(nameservers=("ns1.example.net", "ns2.example.net"), *, available=True):
@@ -105,11 +110,36 @@ def _analysis(
     )
 
 
-def _finding_map(evidence, analysis):
+def _finding_map(evidence, analysis, authoritative_analysis=None):
     return {
         finding.name: finding
-        for finding in build_delegation_findings(evidence, analysis)
+        for finding in build_delegation_findings(
+            evidence,
+            analysis,
+            authoritative_analysis,
+        )
     }
+
+
+def _incomplete_analysis():
+    return _analysis(
+        nameservers=(
+            _ns("ns1.example.net", authority=AUTHORITY_UNKNOWN),
+            _ns("ns2.example.net", authority=AUTHORITY_UNKNOWN),
+        ),
+        consistent=None,
+        complete=False,
+    )
+
+
+def _authoritative_analysis(rrset=("ns1.example.net", "ns2.example.net")):
+    return SimpleNamespace(
+        ns_rrset_consistent=True,
+        servers=(
+            SimpleNamespace(name="ns1.example.net", apex_nameservers=rrset),
+            SimpleNamespace(name="ns2.example.net", apex_nameservers=rrset),
+        ),
+    )
 
 
 class DelegationFindingsTest(unittest.TestCase):
@@ -274,6 +304,71 @@ class DelegationFindingsTest(unittest.TestCase):
         self.assertEqual(findings["Delegation glue"].weight, 0)
         self.assertEqual(findings["Nameserver target aliasing"].status, "unknown")
         self.assertFalse(findings["Nameserver target aliasing"].applicable)
+
+    def test_later_authoritative_rrset_reconciles_incomplete_delegation(self):
+        analysis = _incomplete_analysis()
+        authoritative = _authoritative_analysis()
+
+        reconciled = reconcile_delegation(analysis, authoritative)
+        findings = _finding_map(_evidence(), analysis, authoritative)
+
+        self.assertTrue(reconciled.consistent)
+        self.assertTrue(reconciled.complete)
+        self.assertEqual(reconciled.consistency_source, "authoritative_apex_ns")
+        self.assertEqual(
+            reconciled.authority_confirmed_servers,
+            ("ns1.example.net", "ns2.example.net"),
+        )
+        self.assertEqual(findings["DNS delegation consistency"].status, "pass")
+        self.assertEqual(findings["Delegated nameserver authority"].status, "pass")
+
+    def test_complete_authoritative_reconciliation_can_confirm_real_mismatch(self):
+        analysis = _incomplete_analysis()
+        authoritative = _authoritative_analysis(
+            ("ns1.example.net", "ns3.example.net")
+        )
+
+        reconciled = reconcile_delegation(analysis, authoritative)
+        findings = _finding_map(_evidence(), analysis, authoritative)
+
+        self.assertFalse(reconciled.consistent)
+        self.assertTrue(reconciled.complete)
+        self.assertEqual(reconciled.missing_from_child, ("ns2.example.net",))
+        self.assertEqual(reconciled.extra_in_child, ("ns3.example.net",))
+        self.assertEqual(findings["DNS delegation consistency"].status, "fail")
+
+    def test_incomplete_authoritative_views_do_not_force_reconciliation(self):
+        analysis = _incomplete_analysis()
+        authoritative = SimpleNamespace(
+            ns_rrset_consistent=None,
+            servers=(
+                SimpleNamespace(
+                    name="ns1.example.net",
+                    apex_nameservers=("ns1.example.net", "ns2.example.net"),
+                ),
+                SimpleNamespace(name="ns2.example.net", apex_nameservers=()),
+            ),
+        )
+
+        reconciled = reconcile_delegation(analysis, authoritative)
+
+        self.assertIsNone(reconciled.consistent)
+        self.assertFalse(reconciled.complete)
+
+    def test_public_delegation_report_exposes_reconciliation_source(self):
+        report = delegation_report_data(
+            _evidence(),
+            _incomplete_analysis(),
+            _authoritative_analysis(),
+        )
+
+        self.assertTrue(report["consistent"])
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["consistency_source"], "authoritative_apex_ns")
+        self.assertEqual(
+            report["child_ns"],
+            ["ns1.example.net", "ns2.example.net"],
+        )
 
 
 if __name__ == "__main__":

@@ -206,6 +206,22 @@ class NegativeDnsAnalysisTests(unittest.TestCase):
         state, _ = analyze_recursion_result(cached_without_ra)
         self.assertEqual(state, RecursionState.UNKNOWN)
 
+    def test_open_recursion_requires_confirmed_authoritative_target_path(self):
+        result = _recursion_result()
+
+        state, reason = analyze_recursion_result(
+            result,
+            authority_confirmed=False,
+        )
+        self.assertEqual(state, RecursionState.UNKNOWN)
+        self.assertIn("not independently confirmed", reason)
+
+        state, _ = analyze_recursion_result(
+            result,
+            authority_confirmed=True,
+        )
+        self.assertEqual(state, RecursionState.OPEN)
+
     def test_explicit_refused_is_closed(self):
         state, reason = analyze_recursion_result(
             _recursion_result(state=DnsQueryState.ERROR, rcode="REFUSED", ra=False)
