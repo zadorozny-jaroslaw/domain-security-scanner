@@ -29,7 +29,12 @@ Releases are prepared on `develop`, promoted to `main` through a release pull re
 - [ ] If Web standards checks changed, run an authorized `--scan web` smoke test and review `http.cache`, `http.links`, `http.alt_svc`, and `http.http1_framing` evidence where applicable.
 - [ ] Confirm passive Web metadata checks do not introduce unexpected outbound requests: Link targets are not dereferenced, Alt-Svc alternatives are not contacted, and RFC 9112 does not add a raw HTTP probe.
 - [ ] If DNS/domain checks changed, run an authorized `--scan domain` smoke test and verify unavailable DNS evidence remains distinct from confirmed absence.
-- [ ] If authoritative DNS checks changed, confirm direct queries remain bounded and low-impact and do not perform AXFR, amplification measurement, malformed-packet testing, or high-volume probing by default.
+- [ ] If authoritative DNS checks changed, confirm direct queries remain bounded and low-impact and do not perform AXFR, IXFR, amplification measurement, malformed-packet testing, DNS fuzzing, or high-volume probing by default.
+- [ ] Run the v1.3 DNS release matrix in `tests/fixtures/dns_v1_3_release_matrix.json`: normal unsigned public domain, correctly signed public domain, multiple authoritative servers, broken DNSSEC, lame delegation, parent/child NS mismatch, TCP failure, inherited/effective CAA, wildcard DNS, and confirmed open recursion.
+- [ ] Verify legacy `dns_records` and top-level `caa` remain compatible while the additive `dns` object preserves recursive/direct-authoritative/encrypted provenance.
+- [ ] Review the PDF DNS posture and confirm DNSSEC clearly distinguishes `SECURE`, `UNSIGNED`, `BROKEN`, and `VERIFY`; important delegation failures must remain customer-visible.
+- [ ] Review `dns.path_integrity`; if the direct path is suspected of interception, confirm affected per-server checks remain `VERIFY` and `dns.encrypted_recursive` clearly records any HTTPS/443 fallback provenance.
+- [ ] Confirm encrypted fallback uses two independent resolvers, requires consensus for promoted zone-level RRsets, and does not convert recursive DoH evidence into per-authoritative-server attribution.
 - [ ] If DNSSEC validation changed, test secure, unsigned, broken, and unavailable-evidence cases using controlled fixtures/mocks plus authorized public smoke tests where appropriate.
 - [ ] If the report layout changed, regenerate `docs/example-report.pdf` and its preview.
 - [ ] Review generated reports for secrets or data that should not be committed.

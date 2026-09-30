@@ -70,6 +70,27 @@ The shared state model distinguishes:
 Only `no_answer` and `nxdomain` are treated as record absence. Timeout,
 SERVFAIL, non-authoritative, truncated, transport-error, and generic error
 states are unavailable/inconclusive evidence.
+## Direct-path integrity and encrypted recovery
+
+v1.3 also evaluates whether direct responses can be trusted as coming from the
+intended destination. A single unusual flag is not enough to call a path
+intercepted. The path-integrity layer combines signals such as unexpected
+recursion availability on RD=0 requests, referral-like apex responses, wrong
+referral owners, or AA responses that omit the requested apex RRset.
+
+When the aggregate direct path is `suspected_interception` or mixed, the Domain
+scan can make a bounded encrypted fallback through two independent validating
+DNS-over-HTTPS resolvers. That fallback is explicitly `recursive` evidence over
+HTTPS/443. It can recover zone-level SOA/NS/DS/DNSKEY and nameserver A/AAAA
+material, but it does not acquire the identity of a specific authoritative
+endpoint.
+
+For DNSSEC, consensus material from the encrypted path can be promoted only
+after local DS-to-DNSKEY and RRSIG validation succeeds. For ordinary
+authoritative checks, the fallback cannot turn per-server transport, EDNS,
+SOA-serial consistency, negative-DNS, or open-recursion uncertainty into a
+server-specific pass.
+
 
 ## Authoritative-query behavior
 
@@ -145,11 +166,12 @@ incomplete endpoint sample remains unknown. A nameserver is only classified as
 lame when positive non-authoritative evidence is sufficient and no retained
 unprobed endpoint could still change that server-level conclusion.
 
-The scanner currently retains this richer delegation evidence internally and
-emits the #14 user-facing Domain findings. Additive public JSON/PDF exposure of
-the richer DNS structure remains part of the v1.3 integration work.
+The completed integration exposes this richer evidence under the additive
+public `dns` object while retaining the legacy `dns_records` surface. Recursive,
+direct-authoritative, and encrypted-recursive provenance remain distinct in the
+serialized report, and the PDF renders a compact customer-facing DNS posture.
 
-See [DNS_DELEGATION.md](DNS_DELEGATION.md) for the complete #14 model.
+See [DNS_DELEGATION.md](DNS_DELEGATION.md) for the delegation model.
 
 ## Safety and scope
 
@@ -162,10 +184,10 @@ all authoritative servers or perform broad probing. It does not perform:
 - high-volume recursion tests;
 - malformed-packet testing.
 
-Issue #14 now builds delegation and delegated-nameserver posture on this
-evidence layer. Later v1.3 checks can add transport consistency, DNSSEC, CAA,
-negative-DNS, and recursion analysis while retaining the same conservative
-failure semantics.
+The completed v1.3 Domain/DNS stack builds delegation, bounded authoritative
+transport/SOA/NS observations, DNSSEC, CAA, negative-DNS/wildcard, recursion,
+path-integrity, and encrypted recovery on this evidence model while retaining
+the same conservative failure semantics.
 
 ## Standards context
 

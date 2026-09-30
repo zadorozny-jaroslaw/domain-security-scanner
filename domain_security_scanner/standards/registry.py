@@ -35,7 +35,8 @@ RFC_7838 = StandardReference("RFC7838", 7838, "HTTP Alternative Services", "http
 RFC_8288 = StandardReference("RFC8288", 8288, "Web Linking", "https://www.rfc-editor.org/info/rfc8288", "Web / HTTP Link header and link relation serialization")
 RFC_8460 = StandardReference("RFC8460", 8460, "SMTP TLS Reporting", "https://www.rfc-editor.org/info/rfc8460", "Mail receiving / TLS-RPT")
 RFC_8461 = StandardReference("RFC8461", 8461, "SMTP MTA Strict Transport Security (MTA-STS)", "https://www.rfc-editor.org/info/rfc8461", "Mail receiving / MTA-STS")
-RFC_8615 = StandardReference("RFC8615", 8615, "Well-Known Uniform Resource Identifiers (URIs)", "https://www.rfc-editor.org/info/rfc8615", "Web / well-known security.txt location")
+RFC_8615 = StandardReference("RFC8615", 8615, "Well-Known Uniform Resource Identifiers (URIs)", "https://www.rfc-editor.org/info/rfc8615", "Web / registered well-known security.txt location")
+RFC_8659 = StandardReference("RFC8659", 8659, "DNS Certification Authority Authorization (CAA) Resource Record", "https://www.rfc-editor.org/info/rfc8659", "DNS / effective CAA policy lookup and record processing")
 RFC_9110 = StandardReference("RFC9110", 9110, "HTTP Semantics", "https://www.rfc-editor.org/info/rfc9110", "Web / redirect status and Location semantics")
 RFC_9111 = StandardReference("RFC9111", 9111, "HTTP Caching", "https://www.rfc-editor.org/info/rfc9111", "Web / HTTP cache policy and response caching metadata")
 RFC_9112 = StandardReference("RFC9112", 9112, "HTTP/1.1", "https://www.rfc-editor.org/info/rfc9112", "Web / passive HTTP/1.1 response framing metadata")
@@ -54,7 +55,7 @@ STANDARD_REFERENCES: dict[str, StandardReference] = {
         RFC_1034, RFC_1035, RFC_1912, RFC_2181, RFC_2182, RFC_2308, RFC_5358,
         RFC_4033, RFC_4034, RFC_4035,
         RFC_3986, RFC_6797, RFC_7505, RFC_7838, RFC_8288,
-        RFC_8460, RFC_8461, RFC_8615, RFC_9110, RFC_9111,
+        RFC_8460, RFC_8461, RFC_8615, RFC_8659, RFC_9110, RFC_9111,
         RFC_9112, RFC_9116, RFC_9276, RFC_9471, RFC_9904, RFC_9905,
         RFC_9906, RFC_10025,
     )

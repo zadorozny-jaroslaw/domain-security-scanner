@@ -1,7 +1,10 @@
 # DNS delegation and nameserver posture
 
-Issue #14 adds the first user-facing authoritative-DNS posture layer for v1.3.0.
-It builds on the shared DNS evidence primitives documented in
+Issue #14 introduced the first user-facing authoritative-DNS posture layer for v1.3.0.
+The completed v1.3 integration now combines that delegation model with bounded
+authoritative SOA/NS transport evidence, DNSSEC, negative-DNS/open-recursion
+analysis, path-integrity detection, encrypted zone-level recovery, scoring, and
+reporting. It builds on the shared DNS evidence primitives documented in
 [DNS_EVIDENCE.md](DNS_EVIDENCE.md) and keeps network collection separate from
 pure analysis and finding generation.
 
@@ -70,8 +73,9 @@ endpoint testing:
   fallback endpoint is tested;
 - unprobed candidate addresses remain explicitly recorded.
 
-This keeps the scan low-impact and leaves exhaustive transport/address-family
-consistency to issue #15.
+This keeps the delegation slice low-impact. Later v1.3 stages add bounded
+representative UDP/TCP SOA/NS/EDNS observations; the project still does not
+perform exhaustive per-address transport probing.
 
 ## Analysis semantics
 
@@ -158,29 +162,35 @@ A confirmed CNAME is reported for review. A failed CNAME lookup remains unknown.
 
 ## User-facing findings
 
-Issue #14 emits these Domain findings:
+The final v1.3 integration emits these Domain findings:
 
 | Finding | Current score behavior |
 | --- | --- |
-| Name server redundancy | existing weight 3 retained |
-| DNS delegation consistency | non-scoring |
-| Delegated nameserver authority | non-scoring |
-| Nameserver addressability | non-scoring |
-| Delegation glue | non-scoring |
-| Nameserver target aliasing | non-scoring |
+| Name server redundancy | weight 3 |
+| DNS delegation consistency | weight 6 |
+| Delegated nameserver authority | weight 7 |
+| Nameserver addressability | weight 7 |
+| Delegation glue | advisory / non-scoring |
+| Nameserver target aliasing | advisory / non-scoring |
 
-The richer delegation findings stay at weight 0 until the dedicated v1.3
-JSON/PDF/scoring integration work calibrates DNS scoring as a whole.
+Unknown or path-untrusted cases remain not applicable even when a finding has a
+nominal weight. Later trusted evidence can promote an earlier unknown result only
+when it supports the same claim: for example, RDAP registry NS plus two-resolver
+encrypted apex-NS consensus can recover zone-level consistency, but cannot prove
+that a particular authoritative endpoint answered the scanner.
 
 ## Internal evidence vs public report schema
 
-The scanner currently retains structured evidence in the internal delegation
-and delegation-analysis models and emits the user-facing findings through the
-normal `checks` list.
+The scanner retains structured evidence in the internal delegation and
+delegation-analysis models and exposes the integrated result under the additive
+public `dns` object. The delegation report includes parent/child sets, glue,
+per-nameserver recursive address evidence, and direct authoritative query
+context. Query mode, server IP/name, and transport remain explicit.
 
-The existing public `dns_records` structure is preserved. A richer additive
-public DNS/delegation JSON object and corresponding PDF integration remain part
-of the later v1.3 integration work.
+The existing public `dns_records` structure is preserved for compatibility.
+Trusted encrypted consensus can add previously unavailable NS/SOA values to the
+report copy without replacing already-observed legacy values. The PDF renders a
+compact DNS posture summary plus the normal DNS appendix.
 
 ## Conservative evidence rules
 
@@ -209,19 +219,27 @@ The implementation uses the following references directly:
 
 See [STANDARDS.md](STANDARDS.md) for the project standards registry.
 
-## Deferred from issue #14
+## v1.3 integration boundaries
 
-The following remain outside this slice:
+The broader v1.3 work now adds bounded UDP/TCP authoritative transport evidence,
+SOA/NS comparison, advisory EDNS observations, DNSSEC cryptographic validation,
+negative-DNS/wildcard/open-recursion analysis, RFC 8659 CAA policy evaluation,
+and customer-facing JSON/PDF/scoring integration.
 
-- systematic UDP/TCP availability comparison;
-- SOA collection/consistency;
-- authoritative NS consistency beyond the #14 child-apex view needed for
-  delegation comparison;
-- EDNS behavior;
-- DNSSEC cryptographic validation;
+The release still deliberately excludes:
+
+- exhaustive probing of every authoritative IP/address family;
 - ASN/provider/geographic diversity scoring;
 - AXFR/IXFR;
-- nameserver software fingerprinting.
+- DNS fuzzing or malformed-packet testing;
+- amplification measurement;
+- nameserver software fingerprinting;
+- DANE/TLSA;
+- deep SVCB/HTTPS validation;
+- complete CDS/CDNSKEY lifecycle validation.
 
-Those transport/zone-consistency items are handled by the next v1.3 DNS
-workstream rather than expanding the #14 query budget.
+If direct port-53 traffic appears intercepted, zone-level registry/DoH evidence
+may recover claims such as NS consistency, addressability, signed SOA
+observability, and bounded DNSSEC validation. Per-server authority, transport,
+EDNS, negative-DNS, SOA-serial consistency, and open-recursion conclusions are
+not inferred from that encrypted recursive fallback.

@@ -23,20 +23,24 @@ Depending on the selected groups, the scanner may query the authorized target/ro
 - `https://mta-sts.<root-domain>/.well-known/mta-sts.txt` only after a usable RFC 8461 MTA-STS TXT indicator is found; redirects are not followed and normal HTTPS certificate validation remains enabled;
 - `https://<web-target>/.well-known/security.txt` when Web checks are selected.
 
-The shared v1.3 DNS evidence layer also supports explicit direct queries to one supplied authoritative-server IP over UDP or TCP. Direct authoritative evidence is server- and transport-specific, clears the recursion-desired flag, and does not silently retry UDP evidence over TCP.
+The shared v1.3 DNS evidence layer supports explicit direct queries to one supplied authoritative-server IP over UDP or TCP. Direct authoritative evidence is server- and transport-specific, clears the recursion-desired flag, and keeps UDP and TCP evidence separate instead of silently treating one as the other.
 
-When the `domain` group is selected, the v1.3 delegation check now uses that layer to obtain parent-side delegation evidence and evaluate delegated nameservers. It can:
+When the `domain` group is selected, bounded DNS work can:
 
 - resolve the immediate parent zone's NS set through the configured recursive resolver;
 - resolve addresses for candidate parent authoritative servers;
-- send a bounded direct UDP NS query to a parent server to obtain the child referral;
+- send bounded direct UDP child-delegation queries to representative parent authoritative endpoints;
 - retain delegated NS names and referral glue from authority/additional sections;
-- resolve A, AAAA, and CNAME evidence for each delegated NS;
-- send a bounded direct UDP apex-NS query to representative delegated-server endpoints, using at most one fallback endpoint when the first probe does not positively establish authority.
+- resolve A, AAAA, and CNAME evidence for delegated NS targets;
+- send bounded direct apex-NS probes to delegated-server endpoints;
+- compare representative authoritative SOA behavior over UDP and TCP and make a bounded EDNS(0) observation;
+- perform small negative-DNS, wildcard, and out-of-zone recursion probes where the same endpoint can first be attributed reliably to the assessed zone.
 
-These direct requests can therefore be visible not only to the authorized domain's authoritative DNS provider but also to the relevant parent-zone authoritative infrastructure. They are deliberately small and server-specific. TCP/UDP transport comparison, SOA consistency, and EDNS observations belong to the separate v1.3 authoritative-consistency workstream.
+The scanner also evaluates direct-DNS path integrity. Signals such as unexpected recursion availability on RD=0 requests combined with referral-like or wrong-owner responses can mark the path as suspected interception/rewriting. Suspect responses are not treated as proof of the intended server's behavior.
 
-Direct-authoritative support does not perform zone transfers, amplification measurement, malformed-packet testing, or high-volume DNS probing.
+These direct requests can therefore be visible not only to the authorized domain's authoritative DNS provider but also to the relevant parent-zone authoritative infrastructure. They remain deliberately small and server-specific.
+
+Direct-authoritative support does not perform zone transfers, amplification measurement, malformed-packet testing, DNS fuzzing, or high-volume DNS probing.
 
 Normal scan outputs can therefore be visible in the target's DNS, web-server, reverse-proxy, CDN, firewall, and relevant parent-zone DNS logs.
 
@@ -44,7 +48,22 @@ Several standards-backed Web checks reuse the already-fetched HTTPS homepage res
 
 A CMS-only scan reuses the HTTPS homepage as passive detection context but does not perform the Web group's HTTP redirect probe or `security.txt` request.
 
-## Public infrastructure services
+## Public infrastructure services and encrypted DNS fallback
+
+### DNS-over-HTTPS fallback
+
+When the `domain` group detects a suspect or mixed direct-DNS path, the scanner can use two independent validating DNS-over-HTTPS services over HTTPS/443:
+
+```text
+https://cloudflare-dns.com/dns-query
+https://dns.google/dns-query
+```
+
+The fallback is bounded and zone-level. It can request SOA, NS, DS, and DNSKEY material for the registered/root domain plus A/AAAA evidence for recovered nameserver targets. The queried domain and nameserver hostnames are therefore disclosed to both providers when the fallback is used.
+
+The scanner requires independent agreement for recovered RRsets and performs its own local DNSSEC checks before promoting a DNSSEC result to `secure`; it does not rely on a single provider's AD flag as proof. Encrypted recursive evidence is explicitly labelled as such and is not presented as a response from a specific authoritative server.
+
+The fallback is intended to preserve useful evidence when a local router, Pi-hole enforcement rule, VPN, firewall, or ISP transparently redirects port 53. If direct per-server attribution is unavailable, transport, EDNS, SOA-serial consistency, negative-DNS, and open-recursion checks for a particular authoritative server remain `VERIFY`/informational rather than being inferred from DoH.
 
 ### IANA RDAP bootstrap
 
