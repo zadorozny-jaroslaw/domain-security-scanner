@@ -9,6 +9,10 @@ import dns.rdatatype
 
 from ...models import DnsQueryResult, DnsQueryState, DnsTransport
 from .delegation import DelegatedNameserverEvidence, ParentDelegationEvidence, normalize_dns_name
+from .dns_path_integrity import (
+    DIRECT_PATH_SUSPECTED_INTERCEPTION,
+    assess_direct_dns_result,
+)
 
 
 AUTHORITATIVE_DIRECT_TIMEOUT = 1.5
@@ -92,6 +96,11 @@ def _section_records(
 
 def soa_from_result(result: DnsQueryResult, zone: str) -> tuple[SoaRecord | None, str | None]:
     """Extract one authoritative apex SOA from stored query evidence."""
+    path = assess_direct_dns_result(result)
+    if path.status == DIRECT_PATH_SUSPECTED_INTERCEPTION:
+        details = ", ".join(path.signals) or "direct DNS path anomaly"
+        return None, f"Direct DNS path integrity is suspect: {details}"
+
     if (
         result.state != DnsQueryState.ANSWER
         or result.aa is not True
@@ -140,15 +149,17 @@ def soa_observation(result: DnsQueryResult, zone: str) -> SoaObservation:
 
 
 def apex_ns_from_result(result: DnsQueryResult, zone: str) -> tuple[str, ...]:
-    """Extract a positively authoritative apex NS RRset from query evidence.
+    """Extract a positively attributable authoritative apex NS RRset.
 
     Some authoritative implementations return an apex NS RRset in the DNS
     authority section even for a direct NS query. Treat that as usable child
     evidence only when the response itself is positively authoritative (AA=1),
-    NOERROR, and not truncated. The generic query state may still be ERROR
-    because the shared evidence layer intentionally does not reinterpret
-    authority-section data as an answer for arbitrary RR types.
+    NOERROR, not truncated, and the direct path does not show the transparent
+    interception signature detected by ``dns_path_integrity``.
     """
+    if assess_direct_dns_result(result).status == DIRECT_PATH_SUSPECTED_INTERCEPTION:
+        return ()
+
     if (
         result.aa is not True
         or result.rcode != "NOERROR"

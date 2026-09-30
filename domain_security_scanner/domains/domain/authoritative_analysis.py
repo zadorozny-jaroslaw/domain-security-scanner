@@ -9,12 +9,18 @@ from .authoritative import (
     AuthoritativeServerEvidence,
     SoaRecord,
 )
+from .dns_path_integrity import (
+    DIRECT_PATH_SUSPECTED_INTERCEPTION,
+    DIRECT_PATH_UNKNOWN,
+    assess_direct_dns_result,
+)
 
 
 TRANSPORT_BOTH_RESPOND = "both_respond"
 TRANSPORT_UDP_ONLY = "udp_only"
 TRANSPORT_TCP_ONLY = "tcp_only"
 TRANSPORT_NO_RESPONSE = "no_response"
+TRANSPORT_PATH_UNTRUSTED = "path_untrusted"
 
 SOA_AUTHORITY_AUTHORITATIVE = "authoritative"
 SOA_AUTHORITY_MIXED = "mixed"
@@ -42,6 +48,10 @@ class EndpointTransportAnalysis:
     tcp_responded: bool
     udp_authoritative_soa: bool
     tcp_authoritative_soa: bool
+    udp_path_integrity: str = DIRECT_PATH_UNKNOWN
+    tcp_path_integrity: str = DIRECT_PATH_UNKNOWN
+    udp_path_signals: tuple[str, ...] = ()
+    tcp_path_signals: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,9 +80,21 @@ class AuthoritativeDnsAnalysis:
     observed_ns_rrsets: tuple[tuple[str, tuple[str, ...]], ...]
 
 
+def _path_assessment(result: DnsQueryResult):
+    return assess_direct_dns_result(result)
+
+
 def _has_dns_response(result: DnsQueryResult) -> bool:
     """Whether a direct query produced a DNS message rather than no response."""
     return result.rcode is not None
+
+
+def _has_trusted_dns_response(result: DnsQueryResult) -> bool:
+    """Whether a response arrived without a direct-path interception signature."""
+    return (
+        _has_dns_response(result)
+        and _path_assessment(result).status != DIRECT_PATH_SUSPECTED_INTERCEPTION
+    )
 
 
 def _has_authoritative_soa(observation) -> bool:
@@ -83,19 +105,27 @@ def _has_authoritative_soa(observation) -> bool:
         and result.aa is True
         and result.rcode == "NOERROR"
         and result.tc is not True
+        and _path_assessment(result).status != DIRECT_PATH_SUSPECTED_INTERCEPTION
     )
 
 
 def analyze_endpoint_transport(
     endpoint: AuthoritativeEndpointEvidence,
 ) -> EndpointTransportAnalysis:
-    """Compare ordinary UDP and TCP response availability for one endpoint."""
+    """Compare ordinary UDP/TCP response availability for one endpoint."""
     udp = endpoint.udp_soa.result
     tcp = endpoint.tcp_soa.result
     udp_responded = _has_dns_response(udp)
     tcp_responded = _has_dns_response(tcp)
+    udp_path = _path_assessment(udp)
+    tcp_path = _path_assessment(tcp)
 
-    if udp_responded and tcp_responded:
+    if (
+        udp_path.status == DIRECT_PATH_SUSPECTED_INTERCEPTION
+        or tcp_path.status == DIRECT_PATH_SUSPECTED_INTERCEPTION
+    ):
+        status = TRANSPORT_PATH_UNTRUSTED
+    elif udp_responded and tcp_responded:
         status = TRANSPORT_BOTH_RESPOND
     elif udp_responded:
         status = TRANSPORT_UDP_ONLY
@@ -114,6 +144,10 @@ def analyze_endpoint_transport(
         tcp_responded=tcp_responded,
         udp_authoritative_soa=_has_authoritative_soa(endpoint.udp_soa),
         tcp_authoritative_soa=_has_authoritative_soa(endpoint.tcp_soa),
+        udp_path_integrity=udp_path.status,
+        tcp_path_integrity=tcp_path.status,
+        udp_path_signals=udp_path.signals,
+        tcp_path_signals=tcp_path.signals,
     )
 
 
@@ -129,24 +163,30 @@ def _server_soa_authority_status(server: AuthoritativeServerEvidence) -> str:
         return SOA_AUTHORITY_UNPROBED
 
     positive = [obs for obs in observations if _has_authoritative_soa(obs)]
-    response_observations = [obs for obs in observations if _has_dns_response(obs.result)]
-    uncertain = [obs for obs in observations if not _has_dns_response(obs.result)]
+    response_observations = [
+        obs for obs in observations if _has_trusted_dns_response(obs.result)
+    ]
+    uncertain = [
+        obs
+        for obs in observations
+        if not _has_trusted_dns_response(obs.result)
+    ]
     not_authoritative = [
         obs for obs in response_observations
         if obs.result.state == DnsQueryState.NOT_AUTHORITATIVE
     ]
 
     if positive:
-        # One positive SOA is enough to establish that the delegated server can
-        # serve the zone authoritatively. Transport timeouts on another path are
-        # analyzed separately and must not erase that positive authority proof.
+        # A clean positive SOA is enough to establish service. A separate
+        # intercepted/unknown path is scanner-path uncertainty, not conflicting
+        # server behavior, so it is excluded from the mixed-service decision.
         if len(positive) != len(response_observations):
             return SOA_AUTHORITY_MIXED
         return SOA_AUTHORITY_AUTHORITATIVE
 
     if uncertain:
-        # A timeout, local connectivity problem, or transport error prevents a
-        # confident negative conclusion even when another endpoint looked bad.
+        # A timeout, local connectivity problem, transport error, or suspected
+        # transparent DNS interception prevents a confident negative conclusion.
         return SOA_AUTHORITY_UNKNOWN
 
     if response_observations and len(not_authoritative) == len(response_observations):
@@ -192,10 +232,9 @@ def _server_edns_status(server: AuthoritativeServerEvidence) -> str:
     if _has_authoritative_soa(edns):
         return EDNS_OK
 
-    # Only a returned DNS message is treated as an observable EDNS protocol
-    # anomaly. Timeout/transport failure remains inconclusive because it could
-    # be caused by the scanner's network path.
-    if _has_dns_response(edns.result):
+    # Only a returned, non-intercepted DNS message is treated as an observable
+    # EDNS protocol anomaly. Scanner-path anomalies remain inconclusive.
+    if _has_trusted_dns_response(edns.result):
         return EDNS_ANOMALY
     return EDNS_UNKNOWN
 
@@ -300,6 +339,7 @@ __all__ = [
     "TRANSPORT_UDP_ONLY",
     "TRANSPORT_TCP_ONLY",
     "TRANSPORT_NO_RESPONSE",
+    "TRANSPORT_PATH_UNTRUSTED",
     "SOA_AUTHORITY_AUTHORITATIVE",
     "SOA_AUTHORITY_MIXED",
     "SOA_AUTHORITY_NOT_AUTHORITATIVE",

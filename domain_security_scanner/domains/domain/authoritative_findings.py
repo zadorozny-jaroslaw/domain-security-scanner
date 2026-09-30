@@ -17,6 +17,7 @@ from .authoritative_analysis import (
     SOA_AUTHORITY_UNPROBED,
     TRANSPORT_BOTH_RESPOND,
     TRANSPORT_NO_RESPONSE,
+    TRANSPORT_PATH_UNTRUSTED,
     TRANSPORT_TCP_ONLY,
     TRANSPORT_UDP_ONLY,
     AuthoritativeDnsAnalysis,
@@ -51,6 +52,23 @@ def _transport_finding(analysis: AuthoritativeDnsAnalysis) -> AuthoritativeDnsFi
             "Authoritative DNS transport",
             "unknown",
             "Brak bezpośrednich odpowiedzi z autorytatywnych endpointów; transport UDP/TCP nie może zostać oceniony.",
+            AUTHORITATIVE_TCP_WEIGHT,
+            0,
+            False,
+        )
+
+    path_untrusted = [
+        f"{endpoint.server_name} ({endpoint.server_ip})"
+        for endpoint in endpoints
+        if endpoint.status == TRANSPORT_PATH_UNTRUSTED
+    ]
+    if path_untrusted:
+        return AuthoritativeDnsFinding(
+            "Authoritative DNS transport",
+            "unknown",
+            "Odpowiedź DNS dotarła przez UDP/TCP, ale wzorzec odpowiedzi wskazuje, że bezpośrednia ścieżka do części docelowych IP może być przechwytywana lub przepisywana: "
+            + _names(path_untrusted)
+            + ". Dostępność transportu do zamierzonej usługi autorytatywnej pozostaje VERIFY.",
             AUTHORITATIVE_TCP_WEIGHT,
             0,
             False,

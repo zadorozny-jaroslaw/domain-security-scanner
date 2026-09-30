@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from .dns_reconciliation import reconcile_delegation
+from .dns_path_integrity import assess_direct_dns_result, summarize_authoritative_path
 
 
 def _enum_value(value: Any) -> Any:
@@ -19,7 +20,7 @@ def _query_report(result: Any) -> dict[str, Any] | None:
     transport = getattr(result, "transport", None)
     query_mode = getattr(result, "query_mode", None)
     state = getattr(result, "state", None)
-    return {
+    data = {
         "qname": getattr(result, "qname", getattr(result, "host", None)),
         "qtype": getattr(result, "qtype", getattr(result, "rtype", None)),
         "query_mode": _enum_value(query_mode),
@@ -33,6 +34,15 @@ def _query_report(result: Any) -> dict[str, Any] | None:
         "records": list(getattr(result, "records", ()) or ()),
         "error": getattr(result, "error", None),
     }
+    if data["query_mode"] == "authoritative" and not bool(
+        getattr(result, "request_recursion_desired", False)
+    ):
+        path = assess_direct_dns_result(result)
+        data["path_integrity"] = {
+            "status": path.status,
+            "signals": list(path.signals),
+        }
+    return data
 
 
 def _soa_record_report(record: Any) -> dict[str, Any] | None:
@@ -203,6 +213,16 @@ def authoritative_report_data(
                 {
                     "server_ip": getattr(endpoint, "server_ip", None),
                     "transport_status": getattr(transport, "status", "unknown"),
+                    "path_integrity": {
+                        "udp": {
+                            "status": getattr(transport, "udp_path_integrity", "unknown"),
+                            "signals": list(getattr(transport, "udp_path_signals", ()) or ()),
+                        },
+                        "tcp": {
+                            "status": getattr(transport, "tcp_path_integrity", "unknown"),
+                            "signals": list(getattr(transport, "tcp_path_signals", ()) or ()),
+                        },
+                    },
                     "udp_soa": _soa_observation_report(
                         getattr(endpoint, "udp_soa", None)
                     ),
@@ -329,6 +349,7 @@ def dns_infrastructure_report_data(
         authoritative_dns_analysis,
     )
     return {
+        "path_integrity": summarize_authoritative_path(authoritative_dns),
         "delegation": delegation_report_data(
             delegation,
             delegation_analysis,
