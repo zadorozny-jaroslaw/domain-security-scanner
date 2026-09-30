@@ -45,22 +45,56 @@ class DnsPdfSummaryTest(unittest.TestCase):
                 self.assertEqual(rows[0]["status"], status)
                 self.assertIn(label, rows[0]["value"])
 
+    def test_summary_is_kept_to_two_customer_facing_rows(self):
+        rows = dns_posture_rows(_dns())
+        self.assertEqual(
+            [row["item"] for row in rows],
+            ["DNSSEC", "Delegation / authority"],
+        )
+
     def test_confirmed_delegation_failure_is_visible(self):
         report = _dns()
         report["dns"]["delegation"].update(consistent=False, complete=True)
-        rows = {row["item"]: row for row in dns_posture_rows(report)}
-        self.assertEqual(rows["Delegation"]["status"], "fail")
-        self.assertIn("Confirmed parent/child", rows["Delegation"]["value"])
+        row = dns_posture_rows(report)[1]
+        self.assertEqual(row["status"], "fail")
+        self.assertIn("Delegation: ACTION", row["value"])
 
     def test_unknown_recursion_is_not_forced_to_failure(self):
         report = _dns()
         report["dns"]["open_recursion"] = {"status": "unknown"}
-        rows = {row["item"]: row for row in dns_posture_rows(report)}
-        self.assertEqual(rows["Open recursion"]["status"], "unknown")
+        row = dns_posture_rows(report)[1]
+        self.assertEqual(row["status"], "unknown")
+        self.assertIn("Open recursion: VERIFY", row["value"])
 
-    def test_effective_caa_source_is_shown(self):
-        rows = {row["item"]: row for row in dns_posture_rows(_dns())}
-        self.assertIn("policy.example.com", rows["CAA"]["value"])
+    def test_confirmed_open_recursion_is_obvious(self):
+        report = _dns()
+        report["dns"]["open_recursion"] = {
+            "status": "open",
+            "open_servers": ["ns1.example.net"],
+        }
+        row = dns_posture_rows(report)[1]
+        self.assertEqual(row["status"], "fail")
+        self.assertIn("Open recursion: ACTION on ns1.example.net", row["value"])
+
+    def test_non_pass_authoritative_rrset_remains_visible(self):
+        report = _dns()
+        report["dns"]["soa"]["ns_rrset_consistent"] = False
+        row = dns_posture_rows(report)[1]
+        self.assertEqual(row["status"], "warn")
+        self.assertIn("Apex NS RRset: REVIEW", row["value"])
+
+    def test_effective_caa_source_is_shown_when_inherited(self):
+        report = _dns()
+        report["target_domain"] = "www.example.com"
+        report["dns"]["caa"]["effective_name"] = "example.com"
+        row = dns_posture_rows(report)[1]
+        self.assertIn("CAA: OK at example.com", row["value"])
+
+    def test_same_owner_pass_caa_is_not_repeated_in_summary(self):
+        report = _dns()
+        report["target_domain"] = "policy.example.com"
+        row = dns_posture_rows(report)[1]
+        self.assertNotIn("CAA:", row["value"])
 
 
 class DnsPdfRenderTest(unittest.TestCase):

@@ -159,19 +159,79 @@ def _caa_row(dns: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _normalized_dns_name(value: Any) -> str:
+    return str(value or "").strip().rstrip(".").lower()
+
+
+def _worst_status(statuses: list[str]) -> str:
+    severity = {"pass": 0, "info": 1, "unknown": 2, "warn": 3, "fail": 4}
+    return max(statuses, key=lambda status: severity.get(status, 2), default="unknown")
+
+
+def _delegation_authority_row(
+    report: dict[str, Any],
+    dns: dict[str, Any],
+) -> dict[str, str]:
+    delegation = _delegation_row(dns)
+    authoritative_ns = _authoritative_ns_row(dns)
+    open_recursion = _open_recursion_row(dns)
+    caa = _caa_row(dns)
+
+    clauses = [f"Delegation: {status_label(delegation['status'])}"]
+
+    recursion_clause = f"Open recursion: {status_label(open_recursion['status'])}"
+    open_servers = (dns.get("open_recursion") or {}).get("open_servers") or []
+    if open_recursion["status"] == "fail" and open_servers:
+        recursion_clause += " on " + ", ".join(open_servers)
+    clauses.append(recursion_clause)
+
+    secondary_statuses = []
+    if authoritative_ns["status"] != "pass":
+        clauses.append(
+            f"Apex NS RRset: {status_label(authoritative_ns['status'])}"
+        )
+        secondary_statuses.append(authoritative_ns["status"])
+
+    target_name = _normalized_dns_name(
+        report.get("target_domain") or report.get("root_domain")
+    )
+    effective_caa_name = _normalized_dns_name(
+        (dns.get("caa") or {}).get("effective_name")
+    )
+    inherited_caa = bool(
+        target_name
+        and effective_caa_name
+        and effective_caa_name != target_name
+    )
+    if caa["status"] != "pass" or inherited_caa:
+        caa_clause = f"CAA: {status_label(caa['status'])}"
+        if effective_caa_name:
+            caa_clause += f" at {effective_caa_name}"
+        clauses.append(caa_clause)
+        secondary_statuses.append(caa["status"])
+
+    combined_status = _worst_status(
+        [delegation["status"], open_recursion["status"], *secondary_statuses]
+    )
+    return {
+        "status": combined_status,
+        "item": "Delegation / authority",
+        "value": ". ".join(clauses) + ".",
+    }
+
+
 def dns_posture_rows(report: dict[str, Any]) -> list[dict[str, str]]:
     """Return a compact customer-facing DNS summary for the PDF report.
 
     The function consumes only the additive v1.3 ``report['dns']`` structure and
     keeps unknown/unverifiable states explicit instead of turning them into failures.
+    The PDF summary intentionally uses two rows: DNSSEC plus a compact delegation /
+    authoritative-DNS roll-up. Detailed individual findings remain in ``checks``.
     """
     dns = report.get("dns") or {}
     return [
         _dnssec_row(dns),
-        _delegation_row(dns),
-        _authoritative_ns_row(dns),
-        _open_recursion_row(dns),
-        _caa_row(dns),
+        _delegation_authority_row(report, dns),
     ]
 
 
