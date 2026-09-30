@@ -8,6 +8,10 @@ from .domains.cms import CmsScanMixin
 from .domains.discovery import DiscoveryScanMixin
 from .domains.domain import DomainScanMixin
 from .domains.domain.authoritative import AuthoritativeDnsScanMixin
+from .domains.domain.dns_customer_reporting import (
+    enrich_dns_records_for_report,
+    recover_customer_dns_checks,
+)
 from .domains.domain.delegation import DelegationScanMixin
 from .domains.domain.dnssec import DnssecScanMixin, dnssec_report_data
 from .domains.domain.encrypted_dns import (
@@ -141,6 +145,42 @@ class Scanner(
         return self._score_result().to_dict()
 
     def to_dict(self):
+        dns = {
+            **dns_infrastructure_report_data(
+                getattr(self, "delegation", None),
+                getattr(self, "delegation_analysis", None),
+                getattr(self, "authoritative_dns", None),
+                getattr(self, "authoritative_dns_analysis", None),
+                getattr(self, "caa", {}),
+            ),
+            "encrypted_recursive": encrypted_dns_report_data(
+                getattr(self, "encrypted_dns", None),
+                getattr(self, "encrypted_dnssec_validation", None),
+            ),
+            "zone_recovery": dns_zone_recovery_report_data(
+                getattr(self, "dns_zone_recovery", None),
+            ),
+            "dnssec": dnssec_report_data(
+                getattr(self, "dnssec", None),
+                getattr(self, "dnssec_analysis", None),
+                getattr(self, "dnssec_policy_analysis", None),
+                getattr(self, "dnssec_denial_analysis", None),
+            ),
+            **negative_dns_report_data(
+                getattr(self, "negative_dns", None),
+                getattr(self, "negative_dns_analysis", None),
+            ),
+        }
+        checks = recover_customer_dns_checks(
+            [c.to_dict() for c in self.checks],
+            dns,
+        )
+        dns_records = enrich_dns_records_for_report(
+            self.dns_records,
+            self.root_domain,
+            dns,
+        )
+
         return {
             "domain": self.target_domain,
             "target_domain": self.target_domain,
@@ -150,7 +190,7 @@ class Scanner(
             "scan_groups": list(self.scan_groups),
             "scan_selection": dict(self.scan_selection),
             "score": self.score(),
-            "checks": [c.to_dict() for c in self.checks],
+            "checks": checks,
             "rdap": self.rdap,
             "caa": getattr(self, "caa", {}),
             "mail": self.mail,
@@ -159,33 +199,8 @@ class Scanner(
             "subdomains": sorted(self.subdomains),
             "host_inventory": self.host_inventory(),
             "emails": sorted(self.emails),
-            "dns_records": self.dns_records,
-            "dns": {
-                **dns_infrastructure_report_data(
-                    getattr(self, "delegation", None),
-                    getattr(self, "delegation_analysis", None),
-                    getattr(self, "authoritative_dns", None),
-                    getattr(self, "authoritative_dns_analysis", None),
-                    getattr(self, "caa", {}),
-                ),
-                "encrypted_recursive": encrypted_dns_report_data(
-                    getattr(self, "encrypted_dns", None),
-                    getattr(self, "encrypted_dnssec_validation", None),
-                ),
-                "zone_recovery": dns_zone_recovery_report_data(
-                    getattr(self, "dns_zone_recovery", None),
-                ),
-                "dnssec": dnssec_report_data(
-                    getattr(self, "dnssec", None),
-                    getattr(self, "dnssec_analysis", None),
-                    getattr(self, "dnssec_policy_analysis", None),
-                    getattr(self, "dnssec_denial_analysis", None),
-                ),
-                **negative_dns_report_data(
-                    getattr(self, "negative_dns", None),
-                    getattr(self, "negative_dns_analysis", None),
-                ),
-            },
+            "dns_records": dns_records,
+            "dns": dns,
             "limitations": [
                 "To jest zewnętrzny, niskoinwazyjny health check, a nie pełny pentest.",
                 "Brak wyniku DKIM dla popularnych selektorów nie oznacza braku DKIM.",
