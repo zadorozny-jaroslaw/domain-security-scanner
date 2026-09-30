@@ -9,7 +9,7 @@ wordpress01.zadorozny.pl
 - [Full example PDF](example-report.pdf)
 - [Page 1 preview](example-report-page-1.png)
 
-The example demonstrates the color-coded score, priorities, "why it matters" explanations, domain/mail separation, CMS detection, TLS checks, and technical appendix.
+The example demonstrates the default full scan scope across Domain, Discovery, Mail, TLS, Web, and CMS; the color-coded score and priorities; "why it matters" explanations; DNS delegation/DNSSEC posture with explicit VERIFY handling when direct evidence is not trustworthy; mail security; Web/TLS/CMS observations; external inventory; and the technical DNS appendix.
 
 ## Maintaining the example
 
