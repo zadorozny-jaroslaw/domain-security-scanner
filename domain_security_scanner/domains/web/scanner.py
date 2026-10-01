@@ -425,6 +425,7 @@ class WebScanMixin:
                 )
                 result["security_txt"] = security_txt["valid"]
                 result["security_txt_analysis"] = security_txt
+                redirect_host = security_txt.get("redirect_host")
                 if security_txt["valid"]:
                     self.add_check(
                         "Web", "security.txt", "pass",
@@ -435,7 +436,18 @@ class WebScanMixin:
                     self.add_check(
                         "Web", "security.txt", "warn",
                         f"security.txt jest obecny, ale wymaga korekty wg {RFC_9116.label}: "
-                        + "; ".join(security_txt["errors"][:3]) + ".",
+                        + "; ".join(security_txt["errors"][:3]) + "."
+                        + (
+                            f" Plik pobrano po przekierowaniu na inny host ({redirect_host})."
+                            if redirect_host else ""
+                        ),
+                        0, 0, False,
+                    )
+                elif redirect_host:
+                    self.add_check(
+                        "Web", "security.txt", "info",
+                        "Nie wykryto security.txt: żądanie /.well-known/security.txt zostało "
+                        f"przekierowane na inny host ({redirect_host}), który nie zwrócił pliku security.txt.",
                         0, 0, False,
                     )
                 else:

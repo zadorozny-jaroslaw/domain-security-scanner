@@ -9,7 +9,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 ## [1.3.0] - 2026-09-30
 
 ### Added
-
+- Fix security.txt detection so HTTP 200 HTML soft-404 pages and cross-host redirects to unrelated pages are reported as not found instead of as invalid security.txt files, while still validating genuine security.txt files served through cross-host redirects.
 - Add `--json-only` to skip PDF generation while preserving the normal structured JSON report.
 - Add a shared DNS evidence layer used by Domain, Discovery, and Mail recursive lookups.
 - Add direct single-server authoritative DNS queries over explicit UDP or TCP.

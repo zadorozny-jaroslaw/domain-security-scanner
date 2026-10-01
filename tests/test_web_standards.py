@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
+from domain_security_scanner.scanner import Scanner
 from domain_security_scanner.standards import (
     RFC_3986,
     RFC_6797,
@@ -256,6 +257,238 @@ class SecurityTxtRfc9116Test(unittest.TestCase):
         )
         self.assertFalse(analysis["valid"])
         self.assertTrue(any("Contact" in error for error in analysis["errors"]))
+
+
+class SecurityTxtPresenceTest(unittest.TestCase):
+    NOW = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    URL = "https://example.com/.well-known/security.txt"
+    VALID_TEXT = (
+        "Contact: mailto:security@example.com\n"
+        "Expires: 2026-12-31T23:59:59Z\n"
+    )
+    HTML_TEXT = (
+        "<html><head><style>\n"
+        "body {\n"
+        "position: fixed;\n"
+        "margin: 0;\n"
+        "}\n"
+        "</style></head><body>Hosting</body></html>\n"
+    )
+
+    def test_cross_host_redirect_to_html_page_is_not_present(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text=self.HTML_TEXT,
+            content_type="text/html; charset=UTF-8",
+            requested_url=self.URL,
+            final_url="https://hosting.example.net/",
+            now=self.NOW,
+        )
+        self.assertFalse(analysis["present"])
+        self.assertFalse(analysis["valid"])
+        self.assertEqual(analysis["redirect_host"], "hosting.example.net")
+        self.assertEqual(analysis["fields"], {})
+        self.assertEqual(
+            analysis["errors"],
+            ["response is not a security.txt file (Content-Type text/html, no well-formed Contact or Expires field)"],
+        )
+
+    def test_same_host_html_soft_404_is_not_present(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text=self.HTML_TEXT,
+            content_type="text/html; charset=utf-8",
+            requested_url=self.URL,
+            final_url=self.URL,
+            now=self.NOW,
+        )
+        self.assertFalse(analysis["present"])
+        self.assertIsNone(analysis["redirect_host"])
+        self.assertEqual(analysis["fields"], {})
+
+    def test_non_200_reports_only_the_status_error(self):
+        analysis = analyze_security_txt(
+            status_code=404,
+            text="Not Found",
+            content_type="text/plain; charset=utf-8",
+            requested_url=self.URL,
+            final_url=self.URL,
+            now=self.NOW,
+        )
+        self.assertFalse(analysis["present"])
+        self.assertEqual(analysis["errors"], ["security.txt returned HTTP 404"])
+
+    def test_non_200_after_cross_host_redirect_records_redirect_host(self):
+        analysis = analyze_security_txt(
+            status_code=404,
+            text="",
+            content_type="text/html",
+            requested_url=self.URL,
+            final_url="https://hosting.example.net/missing",
+            now=self.NOW,
+        )
+        self.assertFalse(analysis["present"])
+        self.assertEqual(analysis["redirect_host"], "hosting.example.net")
+        self.assertEqual(analysis["errors"], ["security.txt returned HTTP 404"])
+
+    def test_cross_host_redirect_to_valid_file_stays_valid_with_warning(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text=self.VALID_TEXT,
+            content_type="text/plain; charset=utf-8",
+            requested_url=self.URL,
+            final_url="https://www.example.com/.well-known/security.txt",
+            now=self.NOW,
+        )
+        self.assertTrue(analysis["present"])
+        self.assertTrue(analysis["valid"])
+        self.assertEqual(analysis["redirect_host"], "www.example.com")
+        self.assertTrue(any("different host" in item for item in analysis["warnings"]))
+
+    def test_real_file_served_as_html_is_present_but_invalid(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text=self.VALID_TEXT,
+            content_type="text/html",
+            requested_url=self.URL,
+            final_url=self.URL,
+            now=self.NOW,
+        )
+        self.assertTrue(analysis["present"])
+        self.assertFalse(analysis["valid"])
+        self.assertIn("Content-Type must be text/plain", analysis["errors"])
+
+    def test_missing_content_type_without_fields_is_not_present(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text="hello",
+            content_type="",
+            requested_url=self.URL,
+            final_url=self.URL,
+            now=self.NOW,
+        )
+        self.assertFalse(analysis["present"])
+        self.assertEqual(
+            analysis["errors"],
+            ["response is not a security.txt file (Content-Type missing, no well-formed Contact or Expires field)"],
+        )
+
+    def test_empty_plain_text_file_is_present_but_invalid(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text="",
+            content_type="text/plain; charset=utf-8",
+            requested_url=self.URL,
+            final_url=self.URL,
+            now=self.NOW,
+        )
+        self.assertTrue(analysis["present"])
+        self.assertIn("missing required Contact field", analysis["errors"])
+
+    def test_html_page_with_field_like_lines_is_not_present(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text=(
+                "<html><script>\n"
+                "Cookies.set('c', 1, {\n"
+                "  expires: 365,\n"
+                "});\n"
+                "</script><body>\n"
+                "Contact: +48 123 456 789\n"
+                "</body></html>\n"
+            ),
+            content_type="text/html; charset=utf-8",
+            requested_url=self.URL,
+            final_url="https://hosting.example.net/",
+            now=self.NOW,
+        )
+        self.assertFalse(analysis["present"])
+        self.assertEqual(analysis["fields"], {})
+        self.assertEqual(analysis["redirect_host"], "hosting.example.net")
+
+    def test_malformed_final_url_does_not_raise(self):
+        analysis = analyze_security_txt(
+            status_code=200,
+            text=self.VALID_TEXT,
+            content_type="text/plain; charset=utf-8",
+            requested_url=self.URL,
+            final_url="https://[bad/",
+            now=self.NOW,
+        )
+        self.assertIsNone(analysis["redirect_host"])
+        self.assertIn("final security.txt URL is not a valid absolute URI", analysis["errors"])
+
+
+class SecurityTxtFindingIntegrationTest(unittest.TestCase):
+    SECURITY_TXT_URL = "https://example.com/.well-known/security.txt"
+
+    def _security_txt_check(self, security_txt_response):
+        instance = Scanner("example.com", scan_groups=("web",))
+
+        class RawHeaders:
+            def getlist(self, name):
+                return []
+
+        class Raw:
+            version = 11
+            headers = RawHeaders()
+
+        class Response:
+            def __init__(self, status_code, url, headers=None, text=""):
+                self.status_code = status_code
+                self.url = url
+                self.headers = headers or {}
+                self.text = text
+                self.history = []
+                self.raw = Raw()
+
+        def fake_get(url, **kwargs):
+            if url == "http://example.com":
+                return Response(301, url, {"Location": "https://example.com"})
+            if url == self.SECURITY_TXT_URL:
+                return Response(*security_txt_response)
+            return Response(200, "https://example.com/", {}, "<html></html>")
+
+        instance.session.get = fake_get
+        instance.check_http()
+        check = next(item for item in instance.checks if item.name == "security.txt")
+        return instance, check
+
+    def test_cross_host_redirect_to_html_is_reported_as_not_found(self):
+        instance, check = self._security_txt_check((
+            200,
+            "https://hosting.example.net/",
+            {"Content-Type": "text/html; charset=UTF-8"},
+            "<html><style>\nposition: fixed;\n</style></html>",
+        ))
+        self.assertEqual(check.status, "info")
+        self.assertIn("Nie wykryto security.txt", check.message)
+        self.assertIn("hosting.example.net", check.message)
+        self.assertNotIn("jest obecny", check.message)
+        self.assertFalse(instance.http["security_txt"])
+        self.assertFalse(instance.http["security_txt_analysis"]["present"])
+        self.assertEqual(instance.http["security_txt_analysis"]["fields"], {})
+
+    def test_plain_404_keeps_the_existing_not_found_message(self):
+        _, check = self._security_txt_check((
+            404,
+            self.SECURITY_TXT_URL,
+            {"Content-Type": "text/plain; charset=utf-8"},
+            "",
+        ))
+        self.assertEqual(check.status, "info")
+        self.assertEqual(check.message, "Nie wykryto security.txt w /.well-known/security.txt.")
+
+    def test_invalid_file_behind_cross_host_redirect_names_the_host(self):
+        _, check = self._security_txt_check((
+            200,
+            "https://www.example.com/.well-known/security.txt",
+            {"Content-Type": "text/plain; charset=utf-8"},
+            "Contact: mailto:security@example.com\n",
+        ))
+        self.assertEqual(check.status, "warn")
+        self.assertIn("jest obecny", check.message)
+        self.assertIn("www.example.com", check.message)
 
 
 class CookieRfc10025Test(unittest.TestCase):

@@ -463,17 +463,63 @@ def analyze_security_txt(
     media_type, content_params = _parse_content_type(content_type)
     charset = content_params.get("charset")
 
-    if int(status_code) != 200:
-        errors.append(f"security.txt returned HTTP {status_code}")
+    final_url_ok = is_well_formed_uri_reference(final_url, require_absolute=True)
+    redirect_host = None
+    if final_url_ok:
+        final_host = urlsplit(final_url).hostname
+        if final_host and final_host != urlsplit(requested_url).hostname:
+            redirect_host = final_host
+
+    # A 200 response only counts as a security.txt file when it looks like one.
+    # Soft-404 pages and redirects to an unrelated homepage return HTML without
+    # any RFC 9116 field, and must not be validated as the site's own file.
+    # Outside text/plain a bare "expires: 365" or "Contact: +48..." line in a
+    # page's script or text is not enough: the value has to be well formed.
+    # ponytail: value-shape heuristic; sniff the body more strictly if HTML pages ever match it.
+    present = int(status_code) == 200 and (
+        media_type == "text/plain"
+        or any(
+            is_well_formed_uri_reference(value, require_absolute=True)
+            for value in fields.get("contact", [])
+        )
+        or any(_parse_rfc3339(value) for value in fields.get("expires", []))
+    )
+    if not present:
+        if int(status_code) != 200:
+            errors.append(f"security.txt returned HTTP {status_code}")
+        else:
+            errors.append(
+                f"response is not a security.txt file (Content-Type {media_type or 'missing'}, "
+                "no well-formed Contact or Expires field)"
+            )
+        if redirect_host:
+            warnings.append(f"security.txt request was redirected to a different host: {redirect_host}")
+        return {
+            "present": False,
+            "valid": False,
+            "status_code": int(status_code),
+            "requested_url": requested_url,
+            "final_url": final_url,
+            "redirect_host": redirect_host,
+            "content_type": content_type or None,
+            "fields": {},
+            "contacts": [],
+            "expires": None,
+            "expires_at": None,
+            "canonicals": [],
+            "errors": errors,
+            "warnings": warnings,
+        }
+
     if urlsplit(requested_url).scheme.lower() != "https":
         errors.append("security.txt must be requested over HTTPS")
     if urlsplit(requested_url).path != "/.well-known/security.txt":
         errors.append("security.txt must use the /.well-known/security.txt path")
-    if not is_well_formed_uri_reference(final_url, require_absolute=True):
+    if not final_url_ok:
         errors.append("final security.txt URL is not a valid absolute URI")
     elif urlsplit(final_url).scheme.lower() != "https":
         errors.append("security.txt redirect chain must remain on HTTPS")
-    elif urlsplit(final_url).hostname != urlsplit(requested_url).hostname:
+    elif redirect_host:
         warnings.append("security.txt redirected to a different host; manual trust review is recommended")
 
     if media_type != "text/plain":
@@ -520,11 +566,12 @@ def analyze_security_txt(
         warnings.append("retrieval URI is not listed in Canonical fields")
 
     return {
-        "present": int(status_code) == 200,
+        "present": True,
         "valid": not errors,
         "status_code": int(status_code),
         "requested_url": requested_url,
         "final_url": final_url,
+        "redirect_host": redirect_host,
         "content_type": content_type or None,
         "fields": fields,
         "contacts": contacts,
