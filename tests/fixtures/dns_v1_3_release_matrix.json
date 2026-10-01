@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "release": "v1.3.0",
+  "scenarios": {
+    "normal_unsigned_public_domain": {
+      "mode": "authorized_smoke",
+      "automated": [
+        "tests/test_dnssec_analysis.py",
+        "tests/test_dnssec_findings.py"
+      ]
+    },
+    "correctly_signed_public_domain": {
+      "mode": "authorized_smoke",
+      "automated": [
+        "tests/test_dns_encrypted_dnssec.py",
+        "tests/test_dnssec_analysis.py"
+      ]
+    },
+    "multiple_authoritative_servers": {
+      "mode": "authorized_smoke",
+      "automated": [
+        "tests/test_dns_authoritative.py",
+        "tests/test_dns_delegation_analysis.py"
+      ]
+    },
+    "broken_dnssec": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dnssec_analysis.py",
+        "tests/test_dnssec_findings.py"
+      ]
+    },
+    "lame_delegation": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dns_delegation_analysis.py",
+        "tests/test_dns_delegation_findings.py"
+      ]
+    },
+    "parent_child_ns_mismatch": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dns_delegation_analysis.py",
+        "tests/test_dns_delegation_findings.py"
+      ]
+    },
+    "tcp_failure": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dns_authoritative_analysis.py"
+      ]
+    },
+    "effective_caa_intermediate_ancestor": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dns_caa.py"
+      ]
+    },
+    "wildcard_dns": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dns_negative_analysis.py",
+        "tests/test_dns_negative_integration.py"
+      ]
+    },
+    "open_recursion": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dns_negative_analysis.py",
+        "tests/test_dns_negative_findings.py"
+      ]
+    },
+    "direct_dns_path_interception": {
+      "mode": "controlled_fixture",
+      "automated": [
+        "tests/test_dns_path_integrity.py",
+        "tests/test_dns_encrypted_fallback.py"
+      ]
+    }
+  }
+}

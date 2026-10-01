@@ -15,6 +15,8 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether
 )
 
+from .dns_pdf import dns_posture_rows, status_label
+
 
 REPORT_SCAN_GROUPS = ("domain", "discovery", "mail", "tls", "web", "cms")
 
@@ -206,7 +208,7 @@ def _impact(check: dict[str, Any]) -> str:
         ("https", "Broken HTTPS can prevent users from establishing an authenticated, encrypted connection to the site."),
         ("tls certificate", "An invalid or expiring certificate can cause browser warnings or outages and undermine trust in the encrypted connection."),
         ("name server", "Insufficient DNS redundancy can make the domain more dependent on a single DNS failure."),
-        ("cms update", "Running an older CMS release may leave known bug fixes and security hardening unapplied. An update should be reviewed and tested before deployment."),
+        ("cms update", "Running an older CMS release may leave known bug fixes and security hardening unapplied. An update should be reviewed andtested before deployment."),
         ("cookie security", "Missing cookie protections can make session or authentication cookies easier to expose through insecure transport or client-side script compromise."),
         ("mixed content", "HTTP resources inside an HTTPS page can be blocked, observed, or modified in transit and weaken the page's transport-security posture."),
         ("legacy tls", "TLS 1.0/1.1 are obsolete protocols with weaker security properties and broader compatibility with legacy cryptography."),
@@ -320,6 +322,47 @@ def _technical_status(label: str, value: Any, report: dict[str, Any]) -> str:
         return "info" if disclosure.get("headers") else "pass"
 
     return "info"
+
+def _append_dns_posture(story, report, styles, regular_font: str, bold_font: str) -> None:
+    """Render a compact v1.3 DNS posture summary from structured report evidence."""
+    if not report.get("dns"):
+        return
+
+    rows = [["Status", "DNS control", "Observed posture"]]
+    posture = dns_posture_rows(report)
+    for row in posture:
+        rows.append([
+            status_label(row["status"]),
+            Paragraph(f"<b>{p(row['item'])}</b>", styles["Small"]),
+            Paragraph(p(row["value"]), styles["Small"]),
+        ])
+
+    table = Table(rows, colWidths=[20*mm, 42*mm, 116*mm], repeatRows=1)
+    table_style = [
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#0F172A")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), bold_font),
+        ("FONTNAME", (0,1), (-1,-1), regular_font),
+        ("GRID", (0,0), (-1,-1), 0.25, colors.HexColor("#CBD5E1")),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("FONTSIZE", (0,0), (-1,-1), 7),
+        ("LEFTPADDING", (0,0), (-1,-1), 4),
+        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+        ("TOPPADDING", (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+    ]
+    for idx, row in enumerate(posture, start=1):
+        bg, fg, _ = _status_palette(row["status"])
+        table_style += [
+            ("BACKGROUND", (0,idx), (0,idx), bg),
+            ("TEXTCOLOR", (0,idx), (0,idx), fg),
+            ("FONTNAME", (0,idx), (0,idx), bold_font),
+        ]
+
+    table.setStyle(TableStyle(table_style))
+    story.append(Paragraph("DNS posture", styles["Section"]))
+    story.append(table)
+
 
 def generate_pdf(report: dict[str, Any], output: Path):
     regular_font, bold_font = register_pdf_fonts()
@@ -575,7 +618,10 @@ def generate_pdf(report: dict[str, Any], output: Path):
             if impact:
                 result_text += f"<br/><font size='7'><b>Why it matters:</b> {p(impact)}</font>"
         rows.append([
-            c["status"].upper(), c["category"], c["name"], Paragraph(result_text, styles["Small"])
+            c["status"].upper(),
+            c["category"],
+            Paragraph(p(c["name"]), styles["Small"]),
+            Paragraph(result_text, styles["Small"]),
         ])
     table = Table(rows, colWidths=[20*mm, 24*mm, 38*mm, 94*mm], repeatRows=1)
     table_style = [
@@ -632,6 +678,7 @@ def generate_pdf(report: dict[str, Any], output: Path):
             ("FONTNAME",(0,0),(-1,-1),regular_font),
         ]))
         story.append(t)
+        _append_dns_posture(story, report, styles, regular_font, bold_font)
 
     if "mail" in selected_scan_group_set:
         story.append(Paragraph(f"Mail security - {p(report.get('root_domain', ''))}", styles["Section"]))
@@ -698,15 +745,15 @@ def generate_pdf(report: dict[str, Any], output: Path):
                 ["CMS evidence", "; ".join(cms.get("signals", [])[:5]) or "n/a"],
             ])
         if "tls" in selected_scan_group_set:
-            web_rows.extend([
+            web_rows.extend([\
                 ["TLS protocol", tls.get("protocol", "n/a")],
                 ["TLS cipher", tls.get("cipher", "n/a")],
-                ["TLS 1.0", (tls.get("protocol_support", {}).get("TLS 1.0", {}) or {}).get("status", "not checked")],
+                ["TLS 1.0", (tls.get("protocol_support",{}).get("TLS 1.0", {}) or {}).get("status", "not checked")],
                 ["TLS 1.1", (tls.get("protocol_support", {}).get("TLS 1.1", {}) or {}).get("status", "not checked")],
                 ["Certificate expires in", f"{tls.get('expiry_days')} days" if tls.get("expiry_days") is not None else "n/a"],
             ])
         if "web" in selected_scan_group_set:
-            web_rows.extend([
+            web_rows.extend([\
                 ["HTTPS final URL", http.get("final_url", "n/a")],
                 ["HTTPS status", http.get("https_status", "n/a")],
                 ["Mixed content", f"{len(http.get('mixed_content', []))} insecure reference(s)" if http.get("mixed_content") else "none detected"],
@@ -745,7 +792,7 @@ def generate_pdf(report: dict[str, Any], output: Path):
             ("FONTSIZE",(0,0),(-1,-1),7),
             ("LEFTPADDING",(0,0),(-1,-1),4),
             ("RIGHTPADDING",(0,0),(-1,-1),4),
-            ("TOPPADDING",(0,0),(-1,-1),4),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
             ("BOTTOMPADDING",(0,0),(-1,-1),4),
         ]
         for idx, display_status in enumerate(web_detail_statuses, start=1):
@@ -769,7 +816,10 @@ def generate_pdf(report: dict[str, Any], output: Path):
 
     show_inventory = "discovery" in selected_scan_group_set
     show_dns_appendix = bool({"domain", "discovery"} & selected_scan_group_set)
-    if show_inventory or show_dns_appendix:
+    # Discovery inventory remains a deliberate section boundary. For a
+    # domain-only report, let DNS posture and the DNS appendix flow naturally
+    # so a short posture table does not occupy an otherwise empty page.
+    if show_inventory:
         story.append(PageBreak())
 
     inventory = None
@@ -780,7 +830,7 @@ def generate_pdf(report: dict[str, Any], output: Path):
         story.append(Paragraph(
             f"<b>Subdomains / hosts discovered:</b> {discovered_count} &nbsp; "
             f"<b>current DNS:</b> {len(inventory['live'])} &nbsp; "
-            f"<b>historical:</b> {len(inventory['historical'])}",
+            f"<b>historical:</b>{len(inventory['historical'])}",
             styles["BodyText"]
         ))
 
@@ -893,4 +943,3 @@ def generate_pdf(report: dict[str, Any], output: Path):
     story.append(legal)
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
-

@@ -1,6 +1,6 @@
 # Domain Security Scanner
 
-**Version 1.2.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
+**Version 1.3.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
 
 > **Source-available / non-commercial license.** This project is free for personal, educational, research, evaluation, testing, and internal non-commercial use. Commercial use requires separate written permission from Jarosław Zadorożny. See [LICENSE](LICENSE).
 >
@@ -20,7 +20,8 @@ The example below was generated against a maintainer-controlled WordPress test h
 
 - Exact web-target checks while registration and mail checks follow the registered/root domain
 - Selectable scan groups for domain, discovery, mail, TLS, web, and CMS checks
-- RDAP, DNSSEC, CAA, nameserver and expiry checks
+- RDAP, parent/child delegation, bounded authoritative DNS evidence, DNSSEC cryptographic validation, CAA, and expiry checks
+- Direct-DNS path-integrity detection with encrypted DNS-over-HTTPS recovery when port 53 appears intercepted
 - Certificate Transparency subdomain discovery through `crt.sh`
 - DNS inventory with resolver-error awareness, live/historical hostname separation, and same-site crawling
 - HTTPS/TLS certificate analysis and legacy TLS detection
@@ -98,10 +99,27 @@ security-report-example.com.pdf
 security-report-example.com.json
 ```
 
+To generate only the structured JSON report and skip PDF generation:
+
+```bash
+python domain_security_scan.py example.com --authorized --json-only
+```
+
+`--json-only` changes only the output artifacts. It does not change scan scope, findings, evidence collection, or scoring.
+
+Compare two existing JSON reports without performing a scan:
+
+```bash
+python domain_security_scan.py --diff previous.json current.json
+```
+
+Diff mode ignores known volatile metadata such as `generated_at`, normalizes known set-like scanner collections, and reports meaningful added, removed, and changed values. It does not require `--authorized` because it performs no network activity. Exit code `0` means the reports are semantically equivalent, `1` means meaningful differences were found, and `2` means the comparison input or arguments were invalid.
+
 ## Usage
 
 ```text
-python domain_security_scan.py DOMAIN --authorized [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX]
+python domain_security_scan.py DOMAIN --authorized [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX] [--json-only]
+python domain_security_scan.py --diff OLD_JSON NEW_JSON
 ```
 
 Examples:
@@ -119,11 +137,17 @@ python domain_security_scan.py example.com --authorized --skip discovery,cms
 # --skip wins when the same group appears in both lists
 python domain_security_scan.py example.com --authorized --scan mail,web --skip mail
 
+# Generate structured JSON without creating a PDF
+python domain_security_scan.py example.com --authorized --json-only
+
+# Compare two existing JSON reports; no scan or authorization flag is needed
+python domain_security_scan.py --diff previous.json current.json
+
 python domain_security_scan.py example.com --authorized --max-pages 15 --max-hosts 20
 python domain_security_scan.py example.com --authorized --out customer-example
 ```
 
-The `--authorized` flag is deliberately mandatory.
+The `--authorized` flag is deliberately mandatory for scan mode. Diff mode reads only local JSON reports and does not require authorization.
 
 ## Scan groups
 
@@ -131,7 +155,7 @@ The public scan groups are:
 
 | Group | Main responsibility |
 | --- | --- |
-| `domain` | registered/root-domain posture: RDAP, expiry, registrar, nameservers, DNSSEC, CAA |
+| `domain` | registered/root-domain posture: RDAP, expiry, registrar, DNS delegation/nameservers, DNSSEC, CAA |
 | `discovery` | external attack-surface discovery: Certificate Transparency, crawl, DNS inventory, live/historical host classification |
 | `mail` | MX, SPF, DMARC, DKIM, MTA-STS, TLS-RPT |
 | `tls` | HTTPS certificate, expiry, negotiated TLS/cipher, legacy TLS support |
@@ -174,10 +198,21 @@ This avoids treating a website subdomain as if it were the organization's mail d
 - registrar and nameservers
 - domain-expiry visibility
 - transfer-prohibited status where externally visible
-- DNSSEC indication (`DS` / RDAP)
-- CAA
-- `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `CAA`, and selected `DS` records
+- parent-side DNS delegation, nameserver redundancy, and parent/child NS consistency
+- per-delegated-NS `A`/`AAAA` addressability, alias checks, glue analysis, and bounded direct authority probes
+- bounded authoritative UDP/TCP SOA/NS transport observations plus advisory EDNS(0) comparison
+- direct-DNS path-integrity detection so transparent port-53 interception is reported as `VERIFY` rather than a false pass/fail
+- encrypted DNS-over-HTTPS recovery through two independent resolvers when the direct path is suspect, without pretending that recursive evidence came from a specific authoritative server
+- DNSSEC states `secure`, `unsigned`, `broken`, and `unknown`, with local DS->DNSKEY and RRSIG validation for selected apex DNSKEY/SOA/NS RRsets
+- DNSSEC algorithm/digest policy and denial-of-existence posture, with unknown future parameters kept conservative
+- authoritative negative-DNS, wildcard, and open-recursion observations with positive-evidence requirements
+- RFC 8659 effective CAA lookup from the exact target toward ancestors, stopping at the first non-empty RRset
+- `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `CAA`, selected `DS`, and trusted recovered `SOA` report records
 - passive Certificate Transparency hostname discovery
+
+The legacy `dns_records` object remains available for compatibility. Richer v1.3 evidence is additive under `dns`, including delegation, per-server authoritative context, SOA, DNSSEC, CAA, path-integrity, encrypted-recursive recovery, negative-response, wildcard, and open-recursion evidence. Recursive and direct-authoritative query contexts remain explicitly distinguishable.
+
+See [docs/DNS_DELEGATION.md](docs/DNS_DELEGATION.md) and [docs/DNS_EVIDENCE.md](docs/DNS_EVIDENCE.md) for the v1.3 evidence model and conservative failure semantics.
 
 Discovered hosts are grouped in reports as **current DNS**, **historical CT**, **currently unresolved**, **DNS status unknown**, or **not DNS-assessed**. Historical classification is conservative: a CT-discovered name is only labelled historical when current DNS returns NXDOMAIN. The existing `subdomains` JSON list remains the complete discovered-name list, while the additive `host_inventory` object provides these clearer groups.
 
@@ -250,7 +285,9 @@ WARN and FAIL findings include a short **Why it matters** explanation. The wordi
 
 The score is intentionally named **External Security Hygiene Score**, not a general "security score."
 
-Only applicable weighted checks from the **effective selected scan groups** contribute to the denominator. Findings produced only as prerequisite context for an unselected group are suppressed and cannot affect the score. Unknown/unverifiable checks are excluded rather than penalized. DNS timeouts, SERVFAIL responses and resolver errors are treated as unavailable evidence rather than as proof that a record is absent. Several useful findings - including CMS release currency - are informational or advisory and intentionally have no score weight.
+Only applicable weighted checks from the **effective selected scan groups** contribute to the denominator. Findings produced only as prerequisite context for an unselected group are suppressed and cannot affect the score. Unknown/unverifiable checks are excluded rather than penalized. DNS timeouts, SERVFAIL responses, resolver errors, and direct-path interception are treated as unavailable evidence rather than as proof that a record is absent or a server has failed.
+
+v1.3 DNS weights are impact-oriented rather than proportional to the number of RFC checks: broken DNSSEC, confirmed open recursion, lame/unauthoritative delegated service, unusable nameserver addressing, and material delegation failure carry the strongest weights; bounded EDNS, SOA serial skew, wildcard behavior, denial mechanism choice, and other advisory observations remain non-scoring. Several useful non-DNS findings - including CMS release currency - are also informational or advisory and intentionally have no score weight.
 
 Scores from different scan scopes are not directly comparable. For example, a Web-only score intentionally excludes positive and negative TLS, Mail, Domain, Discovery, and CMS findings that would participate in a full scan.
 
@@ -258,7 +295,7 @@ See [docs/SCORING.md](docs/SCORING.md) for the scoring philosophy.
 
 ## External services and privacy
 
-The scanner talks to the target and to a small number of public infrastructure/release services, including RDAP sources, `crt.sh`, and upstream CMS release sources. No API keys are required for the default checks.
+The scanner talks to the target and to a small number of public infrastructure/release services, including RDAP sources, `crt.sh`, and upstream CMS release sources. When the Domain scan detects a suspect direct port-53 path, it can also query Cloudflare and Google DNS-over-HTTPS endpoints over HTTPS/443 to recover independent zone-level evidence. No API keys are required for the default checks.
 
 Selected scan groups control which checks run, although prerequisite context may require a limited request owned by another group. Before using the scanner in a privacy-sensitive environment, read [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md), which documents what is queried externally.
 
@@ -283,13 +320,15 @@ See [docs/SCOPE.md](docs/SCOPE.md).
 - This is not a penetration test or a guarantee of security.
 - External observation cannot assess MFA, backups, endpoint protection, internal permissions, offboarding, or tenant configuration.
 - DKIM cannot always be discovered without knowing the selector.
-- DNSSEC presence is detected, but the scanner does not perform full cryptographic chain validation.
+- DNSSEC can be cryptographically validated for parent DS, child DNSKEY, and selected apex DNSKEY/SOA/NS RRsets. `secure` therefore means that bounded validation succeeded for that material; it does not mean every RRset in the zone was validated or that DANE/TLSA/CDS/CDNSKEY lifecycle policy was assessed.
+- If direct UDP/TCP port-53 traffic appears intercepted or rewritten, the scanner can recover zone-level SOA/NS/DS/DNSKEY/address evidence through two independent DNS-over-HTTPS resolvers. That fallback does not prove the behavior, transport availability, recursion posture, or SOA serial of each individual authoritative server.
 - `.pl` Registry Lock may require manual verification at the registrar.
 - Certificate Transparency is historical by design; the report separates CT names that now return NXDOMAIN from hosts with current DNS records, while resolver failures remain explicitly unknown.
 - SPF lookup count is a static worst-case estimate; macros and runtime DNS behavior can affect exact evaluation.
 - Cookie analysis is limited to cookies externally visible during the unauthenticated crawl/redirect chain.
 - RFC 8288 `Link` targets are inventoried but not dereferenced, and RFC 7838 `Alt-Svc` alternatives are not contacted or certificate-validated.
 - RFC 9112 coverage is intentionally passive: it inspects HTTP version and framing headers exposed by `requests`/urllib3, but does not validate raw status/header bytes, chunk boundaries, trailers, exact body length, premature EOF, or request-smuggling behavior.
+- v1.3 authoritative DNS checks are deliberately bounded: representative endpoints and transports are sampled rather than exhaustively probing every address. Timeouts and ambiguous network evidence remain `VERIFY`; no AXFR/IXFR, amplification measurement, malformed-packet probing, ASN/provider/geolocation scoring, DANE/TLSA, or deep SVCB/HTTPS validation is performed.
 - Legacy TLS results depend partly on what the local TLS library can test; uncertain cases are reported as `VERIFY`.
 - Passive CMS detection can miss intentionally hidden or heavily proxied platforms.
 - Partial-scope scores summarize only the selected groups and should not be interpreted as equivalent to a full-scan score.
@@ -309,11 +348,12 @@ domain_security_scanner/
 ├── models.py                         # typed check/status/category/score result models
 ├── utils.py                          # domain/date helper functions
 ├── base.py                           # shared Scanner state
+├── dns_evidence.py                   # shared recursive/direct-authoritative DNS evidence and query cache
 ├── orchestration.py                  # scan-group order, selection, prerequisites, execution plan
 ├── scanner.py                        # Scanner composition, execution, scoring, serialization
 ├── cli.py                            # argument parsing and output handling
 ├── domains/
-│   ├── domain/                       # RDAP and authoritative/root DNS posture
+│   ├── domain/                       # RDAP, delegation and authoritative/root DNS posture
 │   ├── discovery/                    # CT discovery, crawl, DNS host inventory
 │   ├── mail/                         # MX/SPF/DMARC/DKIM/MTA-STS/TLS-RPT
 │   ├── tls/                          # certificate and TLS protocol checks
@@ -356,7 +396,7 @@ The project uses semantic versioning:
 - `1.x.0` - compatible new checks/features
 - `2.0.0` - breaking behavior or interface changes
 
-See [CHANGELOG.md](CHANGELOG.md), [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), and [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md).
+See [docs/ROADMAP.md](docs/ROADMAP.md) for planned release themes and scope, [CHANGELOG.md](CHANGELOG.md) for implemented changes, [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) for release validation, and [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for the branch and release workflow.
 
 ## License
 

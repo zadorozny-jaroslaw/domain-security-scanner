@@ -8,19 +8,95 @@ The registry is intentionally small. It is not a general RFC database and does n
 
 | Standard | Scanner coverage | Canonical reference |
 | --- | --- | --- |
+| RFC 1034 | DNS delegation, zone cuts, parent referrals and glue model | https://www.rfc-editor.org/info/rfc1034 |
+| RFC 1035 | DNS message/resource-record semantics used by direct delegation queries | https://www.rfc-editor.org/info/rfc1035 |
+| RFC 1912 | Operational delegation consistency and lame-delegation guidance | https://www.rfc-editor.org/info/rfc1912 |
+| RFC 2181 | NS target canonical-name requirement and DNS clarification used by alias checks | https://www.rfc-editor.org/info/rfc2181 |
+| RFC 2182 | Authoritative-server redundancy and reachability guidance used by delegation posture | https://www.rfc-editor.org/info/rfc2182 |
+| RFC 2308 | Authoritative NXDOMAIN/NODATA and negative SOA evidence | https://www.rfc-editor.org/info/rfc2308 |
+| RFC 4033 | DNSSEC validation model and security states | https://www.rfc-editor.org/info/rfc4033 |
+| RFC 4034 | DNSKEY, DS, RRSIG records and signature timing | https://www.rfc-editor.org/info/rfc4034 |
+| RFC 4035 | DNSSEC authenticated delegation and validation processing | https://www.rfc-editor.org/info/rfc4035 |
+| RFC 5358 | Open-recursion hardening and externally available recursive service | https://www.rfc-editor.org/info/rfc5358 |
 | RFC 3986 | URI/URI-reference validation used by redirects, Web Linking, and `security.txt` fields | https://www.rfc-editor.org/info/rfc3986 |
 | RFC 6797 | HSTS syntax, required `max-age`, duplicate directives, active/inactive policy | https://www.rfc-editor.org/info/rfc6797 |
 | RFC 7505 | Null MX detection and validation | https://www.rfc-editor.org/info/rfc7505 |
 | RFC 7838 | HTTP `Alt-Svc` syntax, alternative authorities, freshness and persistence parameters | https://www.rfc-editor.org/info/rfc7838 |
 | RFC 8288 | HTTP `Link` header serialization, relation types, targets, contexts and selected target attributes | https://www.rfc-editor.org/info/rfc8288 |
 | RFC 8460 | TLS-RPT TXT policy, `rua` destinations and extension handling | https://www.rfc-editor.org/info/rfc8460 |
-| RFC 8461 | MTA-STS TXT indicator, HTTPS policy, modes and MX-pattern coverage | https://www.rfc-editor.org/info/rfc8461 |
+| RFC 8461 | MTA-STS TXT indicator, HTTPS policy, modes, and MX-pattern coverage | https://www.rfc-editor.org/info/rfc8461 |
 | RFC 8615 | `/.well-known/` location used by `security.txt` | https://www.rfc-editor.org/info/rfc8615 |
 | RFC 9110 | HTTP redirect status and `Location` semantics | https://www.rfc-editor.org/info/rfc9110 |
 | RFC 9111 | HTTP cache-policy syntax, freshness metadata, ambiguity and deprecated response `Pragma` | https://www.rfc-editor.org/info/rfc9111 |
+| RFC 8659 | Effective CAA policy lookup, record processing, and issuer restrictions | https://www.rfc-editor.org/info/rfc8659 |
 | RFC 9112 | Passive HTTP/1.1 response-framing metadata: `Content-Length`, `Transfer-Encoding`, protocol version and framing classification | https://www.rfc-editor.org/info/rfc9112 |
 | RFC 9116 | `security.txt` location, media type, required fields and expiry | https://www.rfc-editor.org/info/rfc9116 |
+| RFC 9276 | NSEC3 parameter guidance used for advisory denial-of-existence posture | https://www.rfc-editor.org/info/rfc9276 |
+| RFC 9471 | Current in-domain glue requirements in DNS referral responses | https://www.rfc-editor.org/info/rfc9471 |
+| RFC 9904 | DNSSEC cryptographic algorithm recommendation-update policy | https://www.rfc-editor.org/info/rfc9904 |
+| RFC 9905 | Deprecation policy for RSASHA1 / RSASHA1-NSEC3-SHA1 | https://www.rfc-editor.org/info/rfc9905 |
+| RFC 9906 | Deprecation policy for ECC-GOST / GOST R 34.11-94 | https://www.rfc-editor.org/info/rfc9906 |
 | RFC 10025 | `Set-Cookie` syntax/security semantics, SameSite and secure cookie prefixes | https://www.rfc-editor.org/info/rfc10025 |
+
+## DNS delegation standards
+
+### RFC 1034 + RFC 1035 — delegation, referrals, and zone cuts
+
+RFC 1034 defines the DNS zone-cut/delegation model used by the scanner: parent-side NS records describe delegated subzones, the child zone publishes its authoritative apex NS RRset, and referral responses use the authority section for delegated NS records plus additional address information/glue where needed. RFC 1035 supplies the DNS message and resource-record format used by the direct query path.
+
+The scanner therefore obtains parent delegation evidence independently from the child's ordinary recursive apex NS result, then queries delegated servers directly. Parent/child consistency is derived only from child apex NS data observed in positive authoritative answers.
+
+### RFC 1912 — operational consistency and lame delegation
+
+RFC 1912 is informational operational guidance rather than an Internet Standard. It describes the common operational requirement that parent and child NS data agree and uses the term **lame delegation** for a server that is delegated responsibility for a zone but does not actually provide authoritative service for it.
+
+The scanner applies that guidance conservatively. A timeout, transport error, resolver failure, or otherwise incomplete sample is not enough to call a server lame. Lame status requires positive evidence that the delegated server answered without providing the required authoritative service.
+
+### RFC 2181 — NS targets must not be aliases
+
+RFC 2181 Section 10.3 states that the domain name used as the value of an NS record must not be an alias and must have address information rather than a CNAME RR.
+
+For every delegated NS target, the scanner therefore retains explicit CNAME lookup evidence. A confirmed CNAME dependency is reported for review; a failed CNAME lookup remains unknown instead of being treated as proof that no alias exists.
+
+### RFC 2182 — authoritative-server redundancy and reachability
+
+RFC 2182 discusses the availability value of multiple authoritative servers and the operational importance of reachable listed servers. It notes the baseline requirement for at least two servers for a zone while recommending additional diversity for many operational environments.
+
+The scanner keeps its existing minimum-two-nameserver posture check, but #14 now bases that check on the parent delegation instead of only RDAP metadata. It does not attempt ASN, provider, geographic, or topological diversity scoring.
+
+### RFC 9471 — glue in referral responses
+
+RFC 9471 updates RFC 1034's referral behavior for in-domain nameservers and clarifies that authoritative parent servers are expected to include available glue for in-domain delegated NS names, setting TC when all required glue cannot fit in the chosen transport.
+
+The scanner records observed parent-referral glue, requires glue only for in-bailiwick nameservers, and compares it with current address evidence when that comparison is reliable. A truncated referral is not promoted into a complete delegation conclusion. Direct-path evidence remains server/transport-specific, and later bounded authoritative checks compare UDP/TCP explicitly rather than silently converting one transport into another.
+
+## DNSSEC, CAA, negative DNS, and recursion standards
+
+### RFC 2308 — authoritative negative answers
+
+Negative DNS findings require more than an empty answer. Direct `NOERROR`/NODATA or `NXDOMAIN` is conclusive only when the response is attributable to the intended authoritative endpoint and includes the SOA evidence expected for authoritative negative caching. Timeout, SERVFAIL, referral-like responses, path interception, and incomplete material remain `VERIFY`/unknown.
+
+### RFC 5358 — open recursion
+
+The scanner performs only a small bounded out-of-zone query and does not measure amplification. Open recursion is confirmed only from positive recursive behavior that can be attributed to the same server IP already established as authoritative for the assessed zone. RD/RA flags by themselves are not sufficient evidence.
+
+### RFC 4033 + RFC 4034 + RFC 4035 — DNSSEC validation
+
+The scanner distinguishes `secure`, `unsigned`, `broken`, and `unknown`. It can locally match parent DS to child DNSKEY and cryptographically validate current RRSIGs over DNSKEY plus selected apex SOA/NS RRsets.
+
+When direct port-53 traffic appears intercepted, two independent validating DNS-over-HTTPS resolvers can supply consensus DS/DNSKEY/SOA/NS material. The scanner still performs its own local DS-to-DNSKEY and RRSIG validation before promoting the result to `secure`; an AD flag from one resolver is not treated as sufficient proof.
+
+`secure` is intentionally bounded. It does not mean that every RRset in the zone was validated, and v1.3 does not add DANE/TLSA or complete CDS/CDNSKEY lifecycle validation.
+
+### RFC 9276 + RFC 9904/RFC 9905/RFC 9906 — DNSSEC posture policy
+
+NSEC/NSEC3 mechanism and NSEC3 parameter observations are advisory/non-scoring. Algorithm and digest posture uses the project's versioned policy snapshot: known deprecated algorithms can be surfaced as security-relevant, permitted but non-preferred parameters remain advisory, and unknown future algorithms/digests stay `unknown` rather than being automatically labelled insecure.
+
+The scanner does not currently implement a dedicated RFC 9824 Compact Denial of Existence validator. Negative responses that cannot be classified safely from the collected bounded evidence remain informational/unknown instead of being forced into classic NXDOMAIN/NSEC assumptions.
+
+### RFC 8659 — Certification Authority Authorization
+
+CAA lookup follows the RFC 8659 tree walk from the exact target name toward ancestors and stops at the first non-empty CAA RRset. The scanner records the lookup chain, effective owner, parsed records, `issue`/`issuewild`/`iodef` semantics, critical unknown properties, and malformed values. Resolver failure before an effective policy is established remains `VERIFY` rather than being treated as policy absence.
 
 ## Web standards
 

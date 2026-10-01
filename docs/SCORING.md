@@ -32,6 +32,28 @@ See [SCAN_GROUPS.md](SCAN_GROUPS.md) for selection, prerequisite, and orchestrat
 
 Discovery and CMS include useful evidence and findings, but not every observation has a positive score weight. The exact weights live alongside the checks in the `domain_security_scanner` package so the report always reflects the code that generated it.
 
+## v1.3 DNS scoring
+
+v1.3 calibrates DNS findings by likely security/availability impact rather than by the number of protocol checks implemented. The nominal Domain/DNS weights are:
+
+| Finding | Weight / earned behavior |
+| --- | --- |
+| Name server redundancy | 3; two or more confirmed NS earn 3, one NS earns 0 |
+| DNS delegation consistency | 6; confirmed consistency earns 6, complete material mismatch earns 0, incomplete observed mismatch earns 3 |
+| Delegated nameserver authority | 7; confirmed authority earns 7, confirmed lame service earns 0, mixed/incomplete positive authority evidence can earn 3.5 |
+| Nameserver addressability | 7; confirmed usable addressing earns 7, confirmed no usable address earns 0 |
+| DNSSEC | 10; `secure` earns 10, `unsigned` earns 5, `broken` earns 0 |
+| Confirmed open recursion | 8; confirmed externally available recursion earns 0 |
+| Selective authoritative TCP failure | 2; only scored when a real transport error is confirmed while other authoritative service is healthy |
+| Authoritative NS RRset disagreement | 3; material confirmed disagreement earns 0 |
+| Malformed effective CAA | 2; confirmed malformed effective policy earns 0 |
+
+The following remain advisory/non-scoring by default: delegation glue/NS alias notes, temporary SOA serial skew, bounded EDNS observations, NSEC versus NSEC3 choice, permitted but non-preferred DNSSEC parameters, wildcard behavior, and informational future CDS/CDNSKEY evidence.
+
+A nominal weight does **not** mean an uncertain check is penalized. Timeout, resolver failure, direct-path interception, incomplete endpoint samples, unsupported future DNSSEC algorithms/digests, and other unverifiable states set `applicable=False` and are excluded from both earned and possible points.
+
+When direct port-53 evidence appears intercepted, trusted registry plus encrypted zone-level evidence may recover positive delegation/addressability/DNSSEC posture. That promotion is intentionally limited to claims the evidence can support. DNS-over-HTTPS does not make per-server transport, SOA-serial consistency, EDNS behavior, negative-DNS behavior, or open-recursion checks applicable for a specific authoritative endpoint.
+
 ## Interpreting the score
 
 The current labels are intentionally broad:
