@@ -54,12 +54,14 @@ Scanning a domain and comparing two existing reports are different operations.
 
 The CLI should model them explicitly rather than accumulating mutually exclusive top-level flags.
 
-The target command shape is broadly:
+The preferred installed command shape is broadly:
 
 ```text
-domain-security-scan scan DOMAIN [options]
-domain-security-scan diff OLD_REPORT NEW_REPORT [options]
+domeval scan DOMAIN [options]
+domeval diff OLD_REPORT NEW_REPORT [options]
 ```
+
+The longer `domain-security-scan` executable remains a compatibility alias, while `python -m domain_security_scanner` and `python domain_security_scan.py` provide equivalent module and source-tree entry points.
 
 The v1.4 command contract intentionally makes a hard cut from the earlier flat operation syntax. The script entry point remains available, but scan and diff operations must be selected explicitly rather than inferred from a positional domain or top-level `--diff` flag.
 
@@ -98,8 +100,8 @@ Introduce explicit command handlers for logically distinct operations.
 Primary target:
 
 ```bash
-domain-security-scan scan example.com --authorized
-domain-security-scan diff previous.json current.json
+domeval scan example.com --authorized
+domeval diff previous.json current.json
 ```
 
 Requirements:
@@ -197,7 +199,7 @@ Add a supported way to emit scanner JSON directly to stdout without human-orient
 A target workflow should be possible:
 
 ```bash
-domain-security-scan scan example.com --authorized --json-stdout \
+domeval scan example.com --authorized --json-stdout \
   | jq '.score'
 ```
 
@@ -248,27 +250,43 @@ If a network observation fails but the scanner can represent that condition cons
 
 Provide normal Python CLI entry points.
 
-Target supported invocations:
+Preferred installed invocations:
+
+```bash
+domeval --version
+domeval scan example.com --authorized
+```
+
+Supported compatibility console alias:
 
 ```bash
 domain-security-scan --version
 domain-security-scan scan example.com --authorized
 ```
 
-and:
+Also support:
 
 ```bash
 python -m domain_security_scanner --version
 python -m domain_security_scanner scan example.com --authorized
 ```
 
+Keep the existing source-tree wrapper available:
+
+```bash
+python domain_security_scan.py --version
+python domain_security_scan.py scan example.com --authorized
+```
+
 Add project metadata, console-script configuration, and `domain_security_scanner/__main__.py` as appropriate.
 
-Keep `domain_security_scan.py` as the compatibility script entry point.
+`domeval` is the preferred human-facing executable name. `domain-security-scan` remains available for legacy references and compatibility, while the repository name, Python package name, and source filenames retain their existing naming conventions.
 
 All entry points must delegate to the same CLI implementation and return equivalent exit statuses for equivalent commands.
 
-Avoid creating competing version sources.
+Avoid creating competing version sources. Package metadata must derive its version from the existing project version source.
+
+CI should install the project as a package and smoke-test the installed console scripts plus the module entry point on supported Windows and Linux runners.
 
 ## Workstream 7 - CLI regression contract
 
@@ -312,7 +330,9 @@ Update user-facing documentation after the CLI contract is implemented.
 
 Document:
 
-- supported entry points;
+- `domeval` as the preferred installed command;
+- `domain-security-scan` as the compatibility console alias;
+- `python -m domain_security_scanner` and `domain_security_scan.py` as supported alternate entry points;
 - `scan` command;
 - `diff` command;
 - the intentional removal of the old flat operation syntax;
@@ -359,24 +379,36 @@ Do not document flags as available before their implementation is merged.
 - automatic CI policy decisions based on score or finding severity;
 - broad API redesign;
 - plugin architecture;
-- replacing JSON/PDF report formats.
+- replacing JSON/PDF report formats;
+- platform-specific native launcher metadata beyond the standard Python packaging entry points.
 
 Features such as `--fail-on` or score thresholds can be considered later once the basic CLI execution contract is stable.
 
 ## Compatibility requirements
 
-v1.4.0 intentionally changes the operation syntax while keeping the current script entry point available.
+v1.4.0 intentionally changes the operation syntax while retaining multiple supported entry paths.
 
-The supported script forms use explicit commands:
+Preferred installed forms:
 
 ```text
+domeval scan DOMAIN [options]
+domeval diff OLD_REPORT NEW_REPORT
+```
+
+Compatibility entry points remain:
+
+```text
+domain-security-scan scan DOMAIN [options]
+domain-security-scan diff OLD_REPORT NEW_REPORT
+python -m domain_security_scanner scan DOMAIN [options]
+python -m domain_security_scanner diff OLD_REPORT NEW_REPORT
 python domain_security_scan.py scan DOMAIN [options]
 python domain_security_scan.py diff OLD_REPORT NEW_REPORT
 ```
 
 The earlier flat `python domain_security_scan.py DOMAIN ...` and `python domain_security_scan.py --diff ...` forms are not compatibility requirements and must not be silently reinterpreted as valid commands.
 
-Security report schemas should not change merely because of CLI refactoring.
+Security report schemas should not change merely because of CLI refactoring or packaging.
 
 ## v1.4.0 completion criteria
 
@@ -390,8 +422,9 @@ v1.4.0 is ready when:
 - machine-readable JSON can be consumed without progress output contaminating stdout;
 - documented exit codes distinguish usage, execution, and output failures;
 - expected operational failures do not produce uncontrolled tracebacks;
-- the scanner has supported executable and `python -m` entry points;
-- the `domain_security_scan.py` script entry point still works with the explicit command structure;
+- `domeval` is available as the preferred installed executable;
+- `domain-security-scan` remains available as a compatibility console alias;
+- `python -m domain_security_scanner` and `domain_security_scan.py` invoke the same CLI behavior;
 - CLI behavior has dedicated regression coverage;
 - README/help documentation matches the implemented interface.
 
