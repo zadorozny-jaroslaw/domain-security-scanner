@@ -33,6 +33,17 @@ def _parse_group_list(value: str) -> tuple[str, ...]:
     return tuple(groups)
 
 
+def _parse_scan_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer between 1 and 100") from exc
+
+    if not 1 <= parsed <= 100:
+        raise argparse.ArgumentTypeError("must be between 1 and 100")
+    return parsed
+
+
 def _resolve_scan_groups(
     scan_groups: tuple[str, ...] | None,
     skip_groups: tuple[str, ...] | None,
@@ -42,26 +53,46 @@ def _resolve_scan_groups(
 
 
 def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("domain", help="Domena, np. example.pl")
+    parser.add_argument(
+        "domain",
+        help="Domain or subdomain to scan, for example example.com.",
+    )
     parser.add_argument(
         "--authorized",
         action="store_true",
-        help="Potwierdzam, że mam zgodę na ocenę tej domeny.",
+        help="Confirm that you are authorized to assess this domain.",
     )
-    parser.add_argument("--max-pages", type=int, default=20, choices=range(1, 101))
-    parser.add_argument("--max-hosts", type=int, default=25, choices=range(1, 101))
-    parser.add_argument("--out", default=None, help="Prefiks plików wyjściowych")
+    parser.add_argument(
+        "--max-pages",
+        type=_parse_scan_limit,
+        default=20,
+        metavar="N",
+        help="Maximum pages to crawl (1-100; default: 20).",
+    )
+    parser.add_argument(
+        "--max-hosts",
+        type=_parse_scan_limit,
+        default=25,
+        metavar="N",
+        help="Maximum discovered hosts to assess (1-100; default: 25).",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        metavar="PREFIX",
+        help="Output file prefix. Defaults to security-report-<domain>.",
+    )
     parser.add_argument(
         "--json-only",
         action="store_true",
-        help="Zapisz raport JSON bez generowania pliku PDF.",
+        help="Write the JSON report without generating a PDF report.",
     )
     parser.add_argument(
         "--scan",
         type=_parse_group_list,
         metavar="GROUPS",
         help=(
-            "Skanuj tylko podane grupy, rozdzielone przecinkami. Dostępne: "
+            "Run only the listed comma-separated scan groups. Available: "
             + ", ".join(SCAN_GROUPS)
         ),
     )
@@ -70,15 +101,21 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
         type=_parse_group_list,
         metavar="GROUPS",
         help=(
-            "Pomiń podane grupy z pełnego/wybranego skanu, rozdzielone przecinkami. "
-            "Dostępne: " + ", ".join(SCAN_GROUPS)
+            "Skip the listed comma-separated scan groups. Available: "
+            + ", ".join(SCAN_GROUPS)
         ),
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Low-impact external domain security hygiene scanner."
+        description="Low-impact external domain security hygiene scanner.",
+        epilog=(
+            "Examples:\n"
+            "  python domain_security_scan.py scan example.com --authorized\n"
+            "  python domain_security_scan.py diff previous.json current.json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--version",
@@ -90,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     scan_parser = subparsers.add_parser(
         "scan",
-        help="Scan a domain.",
+        help="Scan an authorized domain.",
         description="Run a security hygiene scan against an authorized domain.",
     )
     _add_scan_arguments(scan_parser)
@@ -101,8 +138,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compare two existing JSON reports.",
         description="Compare two existing JSON reports without running a scan.",
     )
-    diff_parser.add_argument("old_report", metavar="OLD_JSON")
-    diff_parser.add_argument("new_report", metavar="NEW_JSON")
+    diff_parser.add_argument(
+        "old_report",
+        metavar="OLD_JSON",
+        help="Path to the older scanner JSON report.",
+    )
+    diff_parser.add_argument(
+        "new_report",
+        metavar="NEW_JSON",
+        help="Path to the newer scanner JSON report.",
+    )
     diff_parser.set_defaults(handler=run_diff)
 
     return parser
