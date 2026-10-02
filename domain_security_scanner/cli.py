@@ -33,60 +33,102 @@ def _parse_group_list(value: str) -> tuple[str, ...]:
     return tuple(groups)
 
 
+def _parse_scan_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer between 1 and 100") from exc
+
+    if not 1 <= parsed <= 100:
+        raise argparse.ArgumentTypeError("must be between 1 and 100")
+    return parsed
+
+
 def _resolve_scan_groups(
     scan_groups: tuple[str, ...] | None,
     skip_groups: tuple[str, ...] | None,
 ) -> tuple[tuple[str, ...], list[str]]:
-    """Backward-compatible CLI helper delegated to orchestration policy."""
+    """CLI helper delegated to orchestration policy."""
     return resolve_scan_groups(scan_groups, skip_groups)
 
 
-def _run_diff(old_path: str, new_path: str) -> int:
-    try:
-        result = compare_report_files(old_path, new_path)
-    except ReportDiffError as exc:
-        print(f"Diff error: {exc}", file=sys.stderr)
-        return 2
+def _confirm_scan_authorization(domain: str) -> bool:
+    """Request authorization confirmation for interactive scan invocations."""
+    if not sys.stdin.isatty():
+        print(
+            "Authorization confirmation is required before scanning. "
+            "For non-interactive use, re-run the command with --authorized.",
+            file=sys.stderr,
+        )
+        return False
 
-    print(format_diff(result))
-    return 1 if result.has_changes else 0
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Low-impact external domain security hygiene scanner."
+    print(
+        f"This scan will make external requests against {domain}.",
+        file=sys.stderr,
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"Domain Security Scanner {__version__}",
+    print(
+        "Continue only if you own the target or have explicit permission to assess it.",
+        file=sys.stderr,
     )
-    parser.add_argument("domain", nargs="?", help="Domena, np. example.pl")
+    print("Continue with scan? [y/N]: ", end="", file=sys.stderr, flush=True)
+
+    response = sys.stdin.readline()
+    if not response:
+        print("", file=sys.stderr)
+        print("Scan cancelled.", file=sys.stderr)
+        return False
+
+    if response.strip().lower() in {"y", "yes"}:
+        return True
+
+    print("Scan cancelled.", file=sys.stderr)
+    return False
+
+
+def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--diff",
-        nargs=2,
-        metavar=("OLD_JSON", "NEW_JSON"),
-        help="Porównaj semantycznie dwa istniejące raporty JSON bez wykonywania skanu.",
+        "domain",
+        help="Domain or subdomain to scan, for example example.com.",
     )
     parser.add_argument(
         "--authorized",
         action="store_true",
-        help="Potwierdzam, że mam zgodę na ocenę tej domeny.",
+        help=(
+            "Confirm authorization non-interactively and skip the "
+            "authorization prompt."
+        ),
     )
-    parser.add_argument("--max-pages", type=int, default=20, choices=range(1, 101))
-    parser.add_argument("--max-hosts", type=int, default=25, choices=range(1, 101))
-    parser.add_argument("--out", default=None, help="Prefiks plików wyjściowych")
+    parser.add_argument(
+        "--max-pages",
+        type=_parse_scan_limit,
+        default=20,
+        metavar="N",
+        help="Maximum pages to crawl (1-100; default: 20).",
+    )
+    parser.add_argument(
+        "--max-hosts",
+        type=_parse_scan_limit,
+        default=25,
+        metavar="N",
+        help="Maximum discovered hosts to assess (1-100; default: 25).",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        metavar="PREFIX",
+        help="Output file prefix. Defaults to security-report-<domain>.",
+    )
     parser.add_argument(
         "--json-only",
         action="store_true",
-        help="Zapisz raport JSON bez generowania pliku PDF.",
+        help="Write the JSON report without generating a PDF report.",
     )
     parser.add_argument(
         "--scan",
         type=_parse_group_list,
         metavar="GROUPS",
         help=(
-            "Skanuj tylko podane grupy, rozdzielone przecinkami. Dostępne: "
+            "Run only the listed comma-separated scan groups. Available: "
             + ", ".join(SCAN_GROUPS)
         ),
     )
@@ -95,36 +137,71 @@ def main():
         type=_parse_group_list,
         metavar="GROUPS",
         help=(
-            "Pomiń podane grupy z pełnego/wybranego skanu, rozdzielone przecinkami. "
-            "Dostępne: " + ", ".join(SCAN_GROUPS)
+            "Skip the listed comma-separated scan groups. Available: "
+            + ", ".join(SCAN_GROUPS)
         ),
     )
-    args = parser.parse_args()
 
-    if args.diff:
-        scan_only_options = (
-            args.domain is not None
-            or args.authorized
-            or args.scan is not None
-            or args.skip is not None
-            or args.out is not None
-            or args.json_only
-            or args.max_pages != 20
-            or args.max_hosts != 25
-        )
-        if scan_only_options:
-            parser.error("--diff cannot be combined with scan mode or scan-only options")
-        return _run_diff(*args.diff)
 
-    if args.domain is None:
-        parser.error("domain is required unless --diff is used")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Low-impact external domain security hygiene scanner.",
+        epilog=(
+            "Examples:\n"
+            "  python domain_security_scan.py scan example.com --authorized\n"
+            "  python domain_security_scan.py diff previous.json current.json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"Domain Security Scanner {__version__}",
+    )
 
-    if not args.authorized:
-        print(
-            "Refusing to scan without --authorized. "
-            "Run only against domains you own or have explicit permission to assess.",
-            file=sys.stderr,
-        )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    scan_parser = subparsers.add_parser(
+        "scan",
+        help="Scan an authorized domain.",
+        description="Run a security hygiene scan against an authorized domain.",
+    )
+    _add_scan_arguments(scan_parser)
+    scan_parser.set_defaults(handler=run_scan)
+
+    diff_parser = subparsers.add_parser(
+        "diff",
+        help="Compare two existing JSON reports.",
+        description="Compare two existing JSON reports without running a scan.",
+    )
+    diff_parser.add_argument(
+        "old_report",
+        metavar="OLD_JSON",
+        help="Path to the older scanner JSON report.",
+    )
+    diff_parser.add_argument(
+        "new_report",
+        metavar="NEW_JSON",
+        help="Path to the newer scanner JSON report.",
+    )
+    diff_parser.set_defaults(handler=run_diff)
+
+    return parser
+
+
+def run_diff(args: argparse.Namespace) -> int:
+    try:
+        result = compare_report_files(args.old_report, args.new_report)
+    except ReportDiffError as exc:
+        print(f"Diff error: {exc}", file=sys.stderr)
+        return 2
+
+    print(format_diff(result))
+    return 1 if result.has_changes else 0
+
+
+def run_scan(args: argparse.Namespace) -> int:
+    if not args.authorized and not _confirm_scan_authorization(args.domain):
         return 2
 
     selected_groups, selection_warnings = _resolve_scan_groups(args.scan, args.skip)
@@ -171,3 +248,9 @@ def main():
     if pdf_path is not None:
         print(f"[+] PDF:  {pdf_path}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.handler(args)
