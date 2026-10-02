@@ -47,6 +47,8 @@ class CliCommandStructureTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Run a security hygiene scan", stdout)
         self.assertIn("--authorized", stdout)
+        self.assertIn("Confirm authorization non-interactively", stdout)
+        self.assertIn("authorization prompt.", stdout)
         self.assertIn("--max-pages N", stdout)
         self.assertIn("--max-hosts N", stdout)
         self.assertIn("1-100; default: 20", stdout)

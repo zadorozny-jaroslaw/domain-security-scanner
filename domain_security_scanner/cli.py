@@ -52,6 +52,39 @@ def _resolve_scan_groups(
     return resolve_scan_groups(scan_groups, skip_groups)
 
 
+def _confirm_scan_authorization(domain: str) -> bool:
+    """Request authorization confirmation for interactive scan invocations."""
+    if not sys.stdin.isatty():
+        print(
+            "Authorization confirmation is required before scanning. "
+            "For non-interactive use, re-run the command with --authorized.",
+            file=sys.stderr,
+        )
+        return False
+
+    print(
+        f"This scan will make external requests against {domain}.",
+        file=sys.stderr,
+    )
+    print(
+        "Continue only if you own the target or have explicit permission to assess it.",
+        file=sys.stderr,
+    )
+    print("Continue with scan? [y/N]: ", end="", file=sys.stderr, flush=True)
+
+    response = sys.stdin.readline()
+    if not response:
+        print("", file=sys.stderr)
+        print("Scan cancelled.", file=sys.stderr)
+        return False
+
+    if response.strip().lower() in {"y", "yes"}:
+        return True
+
+    print("Scan cancelled.", file=sys.stderr)
+    return False
+
+
 def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "domain",
@@ -60,7 +93,10 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--authorized",
         action="store_true",
-        help="Confirm that you are authorized to assess this domain.",
+        help=(
+            "Confirm authorization non-interactively and skip the "
+            "authorization prompt."
+        ),
     )
     parser.add_argument(
         "--max-pages",
@@ -165,12 +201,7 @@ def run_diff(args: argparse.Namespace) -> int:
 
 
 def run_scan(args: argparse.Namespace) -> int:
-    if not args.authorized:
-        print(
-            "Refusing to scan without --authorized. "
-            "Run only against domains you own or have explicit permission to assess.",
-            file=sys.stderr,
-        )
+    if not args.authorized and not _confirm_scan_authorization(args.domain):
         return 2
 
     selected_groups, selection_warnings = _resolve_scan_groups(args.scan, args.skip)
