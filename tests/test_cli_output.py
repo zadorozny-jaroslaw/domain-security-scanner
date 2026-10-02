@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -71,7 +70,6 @@ class CliOutputModeTest(unittest.TestCase):
         stderr = io.StringIO()
 
         with (
-            patch.object(sys, "argv", ["domain_security_scan.py", *args]),
             patch.object(cli, "Scanner", _FakeScanner),
             patch.object(
                 cli,
@@ -81,7 +79,7 @@ class CliOutputModeTest(unittest.TestCase):
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
-            result = cli.main()
+            result = cli.main(args)
 
         return result, stdout.getvalue(), stderr.getvalue(), generate_pdf
 
@@ -94,6 +92,7 @@ class CliOutputModeTest(unittest.TestCase):
 
             result, stdout, stderr, generate_pdf = self._run_cli(
                 [
+                    "scan",
                     "example.com",
                     "--authorized",
                     "--out",
@@ -116,6 +115,7 @@ class CliOutputModeTest(unittest.TestCase):
 
             result, stdout, stderr, generate_pdf = self._run_cli(
                 [
+                    "scan",
                     "example.com",
                     "--authorized",
                     "--json-only",
@@ -142,6 +142,7 @@ class CliOutputModeTest(unittest.TestCase):
 
             default_result, _, _, _ = self._run_cli(
                 [
+                    "scan",
                     "example.com",
                     "--authorized",
                     "--out",
@@ -151,6 +152,7 @@ class CliOutputModeTest(unittest.TestCase):
             )
             json_only_result, _, _, _ = self._run_cli(
                 [
+                    "scan",
                     "example.com",
                     "--authorized",
                     "--json-only",
@@ -176,6 +178,7 @@ class CliOutputModeTest(unittest.TestCase):
 
             result, _, stderr, generate_pdf = self._run_cli(
                 [
+                    "scan",
                     "example.com",
                     "--authorized",
                     "--json-only",
@@ -208,7 +211,7 @@ class CliOutputModeTest(unittest.TestCase):
 
     def test_json_only_does_not_weaken_authorization_requirement(self):
         result, stdout, stderr, generate_pdf = self._run_cli(
-            ["example.com", "--json-only"]
+            ["scan", "example.com", "--json-only"]
         )
 
         self.assertEqual(result, 2)
