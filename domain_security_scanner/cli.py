@@ -148,8 +148,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Low-impact external domain security hygiene scanner.",
         epilog=(
             "Examples:\n"
-            "  python domain_security_scan.py scan example.com --authorized\n"
-            "  python domain_security_scan.py diff previous.json current.json"
+            "  domeval scan example.com --authorized\n"
+            "  domeval diff previous.json current.json"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

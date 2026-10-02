@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "domain-security-scanner"
+description = "Low-impact external security posture scanner for domains."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Jarosław Zadorożny" },
+]
+dynamic = ["version", "dependencies"]
+
+[project.urls]
+Repository = "https://github.com/zadorozny-jaroslaw/domain-security-scanner"
+Issues = "https://github.com/zadorozny-jaroslaw/domain-security-scanner/issues"
+
+[project.scripts]
+domeval = "domain_security_scanner.cli:main"
+domain-security-scan = "domain_security_scanner.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+license-files = ["LICENSE"]
+
+[tool.setuptools.packages.find]
+include = ["domain_security_scanner*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "domain_security_scanner.version.__version__" }
+dependencies = { file = ["requirements.txt"] }

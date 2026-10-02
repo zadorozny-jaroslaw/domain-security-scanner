@@ -31,11 +31,11 @@ class CliCommandStructureTest(unittest.TestCase):
         self.assertIn("scan", stdout)
         self.assertIn("diff", stdout)
         self.assertIn(
-            "python domain_security_scan.py scan example.com --authorized",
+            "domeval scan example.com --authorized",
             stdout,
         )
         self.assertIn(
-            "python domain_security_scan.py diff previous.json current.json",
+            "domeval diff previous.json current.json",
             stdout,
         )
         self.assertEqual(stderr, "")
