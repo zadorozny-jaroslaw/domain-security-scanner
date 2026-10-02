@@ -11,6 +11,9 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Add explicit `scan` and `diff` CLI commands with command-specific arguments and dedicated execution handlers.
 - Add interactive scan-authorization confirmation when `--authorized` is omitted in a terminal; `--authorized` remains the non-interactive confirmation path and skips the prompt.
 - Add command-focused CLI regression coverage for help output, scan/diff routing, removed legacy syntax, scan-limit validation, and interactive/non-interactive authorization behavior.
+- Add installable Python project metadata with `domeval` as the preferred console command and `domain-security-scan` as a compatibility alias.
+- Add `python -m domain_security_scanner` as a supported module entry point while retaining `domain_security_scan.py` as the source-tree compatibility wrapper.
+- Add entry-point regression tests and CI smoke coverage for installed console commands and module execution.
 
 ### Changed
 
@@ -18,6 +21,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Reject malformed or removed command forms during argument parsing before scanner activity begins.
 - Improve CLI help with English descriptions, representative examples, command-specific options, and compact `1-100` scan-limit descriptions.
 - Keep `diff` as a local report operation that does not require scan authorization.
+- Prefer the shorter `domeval` executable in user-facing examples while retaining the longer installed alias and existing package/file naming conventions.
+- Install the project itself in CI so package metadata and generated console entry points are exercised on supported Windows and Linux runners.
 
 ## [1.3.0] - 2026-09-30
 
