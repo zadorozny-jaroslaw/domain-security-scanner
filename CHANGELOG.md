@@ -6,6 +6,19 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add explicit `scan` and `diff` CLI commands with command-specific arguments and dedicated execution handlers.
+- Add interactive scan-authorization confirmation when `--authorized` is omitted in a terminal; `--authorized` remains the non-interactive confirmation path and skips the prompt.
+- Add command-focused CLI regression coverage for help output, scan/diff routing, removed legacy syntax, scan-limit validation, and interactive/non-interactive authorization behavior.
+
+### Changed
+
+- Make a hard cut from the earlier flat CLI forms: scans now use `scan DOMAIN ...` and report comparison uses `diff OLD_JSON NEW_JSON`.
+- Reject malformed or removed command forms during argument parsing before scanner activity begins.
+- Improve CLI help with English descriptions, representative examples, command-specific options, and compact `1-100` scan-limit descriptions.
+- Keep `diff` as a local report operation that does not require scan authorization.
+
 ## [1.3.0] - 2026-09-30
 
 ### Added

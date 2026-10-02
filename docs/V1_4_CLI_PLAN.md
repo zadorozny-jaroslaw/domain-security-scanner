@@ -61,7 +61,7 @@ domain-security-scan scan DOMAIN [options]
 domain-security-scan diff OLD_REPORT NEW_REPORT [options]
 ```
 
-Backward compatibility with the current script-style scan invocation should be retained during the transition where practical.
+The v1.4 command contract intentionally makes a hard cut from the earlier flat operation syntax. The script entry point remains available, but scan and diff operations must be selected explicitly rather than inferred from a positional domain or top-level `--diff` flag.
 
 ### Keep automation behavior stable
 
@@ -87,9 +87,9 @@ v1.4.0 should build on that behavior rather than replacing it unnecessarily.
 
 ### Semantic report comparison
 
-Semantic comparison of existing JSON reports is being developed separately before the main CLI-readiness work.
+Semantic comparison of existing JSON reports is already implemented as a report-aware local operation.
 
-The v1.4 command structure should expose that capability cleanly as a report operation rather than duplicating its comparison engine.
+The v1.4 command structure should expose that capability cleanly through the `diff` command rather than duplicating its comparison engine.
 
 ## Workstream 1 - Command structure
 
@@ -109,7 +109,9 @@ Requirements:
 - global `--help` and `--version` remain discoverable;
 - `diff` does not require scanning authorization;
 - parser validation completes before scanner network activity begins;
-- existing scan invocation remains supported during the compatibility period where practical.
+- the earlier flat `DOMAIN ...` and top-level `--diff` forms are rejected rather than silently reinterpreted;
+- interactive scan invocations may confirm authorization at a prompt when `--authorized` is omitted;
+- non-interactive scan invocations must provide `--authorized` and fail before scanner activity if it is missing.
 
 Prefer a CLI structure such as:
 
@@ -217,7 +219,7 @@ Initial target:
 
 ```text
 0     command completed successfully
-2     invalid command usage, invalid input, or authorization missing
+2     invalid command usage, invalid input, or authorization not confirmed
 3     scan could not complete
 4     report/output generation failed
 130   interrupted by the user
@@ -229,7 +231,7 @@ Handle at least:
 
 - invalid arguments;
 - invalid domain input;
-- missing authorization;
+- authorization declined or unavailable in non-interactive mode without `--authorized`;
 - scanner initialization failure;
 - unrecoverable scan execution failure;
 - JSON write/serialization failure;
@@ -262,7 +264,7 @@ python -m domain_security_scanner scan example.com --authorized
 
 Add project metadata, console-script configuration, and `domain_security_scanner/__main__.py` as appropriate.
 
-Keep `domain_security_scan.py` as a compatibility entry point.
+Keep `domain_security_scan.py` as the compatibility script entry point.
 
 All entry points must delegate to the same CLI implementation and return equivalent exit statuses for equivalent commands.
 
@@ -279,9 +281,11 @@ At minimum test:
 - version;
 - scan command;
 - diff command;
-- backward-compatible scan invocation;
+- rejection of the removed flat scan and top-level `--diff` syntax;
 - invalid/missing domain;
-- authorization enforcement;
+- interactive authorization confirmation and cancellation;
+- non-interactive authorization enforcement;
+- `--authorized` prompt bypass;
 - scan-group validation;
 - `--scan` / `--skip` interaction;
 - scan-limit validation;
@@ -311,8 +315,9 @@ Document:
 - supported entry points;
 - `scan` command;
 - `diff` command;
-- backward-compatible invocation;
-- authorization behavior;
+- the intentional removal of the old flat operation syntax;
+- interactive authorization confirmation;
+- `--authorized` for non-interactive use and prompt bypass;
 - scan-group selection;
 - scan limits;
 - JSON-only mode;
@@ -349,7 +354,7 @@ Do not document flags as available before their implementation is merged.
 - changing the security scoring model;
 - changing UNKNOWN/VERIFY semantics;
 - configuration-file systems;
-- interactive/TUI interfaces;
+- general interactive/TUI interfaces beyond the bounded authorization confirmation prompt;
 - shell-completion frameworks unless required by the chosen packaging mechanism;
 - automatic CI policy decisions based on score or finding severity;
 - broad API redesign;
@@ -360,11 +365,16 @@ Features such as `--fail-on` or score thresholds can be considered later once th
 
 ## Compatibility requirements
 
-v1.4.0 should avoid unnecessary breaking changes.
+v1.4.0 intentionally changes the operation syntax while keeping the current script entry point available.
 
-The current script entry point should remain available.
+The supported script forms use explicit commands:
 
-Where the introduction of subcommands changes the preferred syntax, provide a reasonable compatibility path for existing scan commands rather than silently changing their meaning.
+```text
+python domain_security_scan.py scan DOMAIN [options]
+python domain_security_scan.py diff OLD_REPORT NEW_REPORT
+```
+
+The earlier flat `python domain_security_scan.py DOMAIN ...` and `python domain_security_scan.py --diff ...` forms are not compatibility requirements and must not be silently reinterpreted as valid commands.
 
 Security report schemas should not change merely because of CLI refactoring.
 
@@ -374,13 +384,14 @@ v1.4.0 is ready when:
 
 - built-in help clearly exposes supported operations and their options;
 - scanning and report comparison have explicit command paths;
-- authorization remains mandatory for scans and irrelevant to local report comparison;
+- scan authorization is explicitly confirmed either interactively or through `--authorized`, while local report comparison requires no scan authorization;
+- non-interactive scans without `--authorized` fail before scanner activity begins;
 - verbose and quiet modes behave predictably;
 - machine-readable JSON can be consumed without progress output contaminating stdout;
 - documented exit codes distinguish usage, execution, and output failures;
 - expected operational failures do not produce uncontrolled tracebacks;
 - the scanner has supported executable and `python -m` entry points;
-- the compatibility script still works;
+- the `domain_security_scan.py` script entry point still works with the explicit command structure;
 - CLI behavior has dedicated regression coverage;
 - README/help documentation matches the implemented interface.
 
