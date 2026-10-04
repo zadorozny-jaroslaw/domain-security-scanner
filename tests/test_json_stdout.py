@@ -90,9 +90,10 @@ class JsonStdoutContractTest(unittest.TestCase):
         )
 
         self.assertEqual(result, 0)
-        self.assertIn("--json-stdout", stdout)
-        self.assertIn("stdout only", stdout)
-        self.assertIn("do not create JSON or PDF files", stdout)
+        normalized_help = " ".join(stdout.split())
+        self.assertIn("--json-stdout", normalized_help)
+        self.assertIn("stdout only", normalized_help)
+        self.assertIn("do not create JSON or PDF files", normalized_help)
         self.assertEqual(stderr, "")
         generate_pdf.assert_not_called()
 
