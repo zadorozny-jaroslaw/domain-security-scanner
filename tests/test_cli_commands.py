@@ -55,6 +55,8 @@ class CliCommandStructureTest(unittest.TestCase):
         self.assertIn("1-100; default: 25", stdout)
         self.assertIn("--scan", stdout)
         self.assertIn("--skip", stdout)
+        self.assertIn("-v, --verbose", stdout)
+        self.assertIn("-q, --quiet", stdout)
         self.assertNotIn("{1,2,3,4,5", stdout)
         self.assertNotIn("OLD_JSON", stdout)
         self.assertEqual(stderr, "")
@@ -70,7 +72,19 @@ class CliCommandStructureTest(unittest.TestCase):
         self.assertIn("newer scanner JSON report", stdout)
         self.assertNotIn("--authorized", stdout)
         self.assertNotIn("--max-pages", stdout)
+        self.assertNotIn("--verbose", stdout)
+        self.assertNotIn("--quiet", stdout)
         self.assertEqual(stderr, "")
+        scanner.assert_not_called()
+
+    def test_verbose_and_quiet_are_mutually_exclusive(self):
+        code, stdout, stderr, scanner = self._run(
+            ["scan", "example.com", "--authorized", "-v", "--quiet"]
+        )
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("not allowed with argument", stderr)
         scanner.assert_not_called()
 
     def test_legacy_flat_scan_invocation_is_rejected(self):

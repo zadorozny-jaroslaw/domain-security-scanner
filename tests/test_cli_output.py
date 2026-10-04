@@ -120,12 +120,12 @@ class CliOutputModeTest(unittest.TestCase):
             )
 
             self.assertEqual(result, 0)
-            self.assertEqual(stderr, "")
+            self.assertEqual(stdout, "")
             self.assertTrue(prefix.with_suffix(".json").is_file())
             self.assertTrue(prefix.with_suffix(".pdf").is_file())
             generate_pdf.assert_called_once()
-            self.assertIn("[+] JSON:", stdout)
-            self.assertIn("[+] PDF:", stdout)
+            self.assertIn("[+] JSON:", stderr)
+            self.assertIn("[+] PDF:", stderr)
 
     def test_json_only_writes_json_without_generating_pdf(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -143,12 +143,12 @@ class CliOutputModeTest(unittest.TestCase):
             )
 
             self.assertEqual(result, 0)
-            self.assertEqual(stderr, "")
+            self.assertEqual(stdout, "")
             self.assertTrue(prefix.with_suffix(".json").is_file())
             self.assertFalse(prefix.with_suffix(".pdf").exists())
             generate_pdf.assert_not_called()
-            self.assertIn("[+] JSON:", stdout)
-            self.assertNotIn("[+] PDF:", stdout)
+            self.assertIn("[+] JSON:", stderr)
+            self.assertNotIn("[+] PDF:", stderr)
 
     def test_json_only_preserves_json_content(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -243,13 +243,14 @@ class CliOutputModeTest(unittest.TestCase):
             )
 
             self.assertEqual(result, 0)
+            self.assertEqual(stdout, "")
             self.assertIn("external requests against example.com", stderr)
             self.assertIn("Continue with scan? [y/N]:", stderr)
             self.assertIsNotNone(_FakeScanner.last_instance)
             self.assertTrue(_FakeScanner.last_instance.ran)
             self.assertTrue(prefix.with_suffix(".json").is_file())
             generate_pdf.assert_not_called()
-            self.assertIn("[+] JSON:", stdout)
+            self.assertIn("[+] JSON:", stderr)
 
     def test_missing_authorized_prompts_and_default_no_cancels(self):
         result, stdout, stderr, generate_pdf = self._run_cli(
@@ -281,7 +282,7 @@ class CliOutputModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefix = Path(tmpdir) / "authorized-report"
 
-            result, _, stderr, generate_pdf = self._run_cli(
+            result, stdout, stderr, generate_pdf = self._run_cli(
                 [
                     "scan",
                     "example.com",
@@ -294,7 +295,9 @@ class CliOutputModeTest(unittest.TestCase):
             )
 
             self.assertEqual(result, 0)
-            self.assertEqual(stderr, "")
+            self.assertEqual(stdout, "")
+            self.assertNotIn("Continue with scan?", stderr)
+            self.assertIn("[+] JSON:", stderr)
             self.assertTrue(prefix.with_suffix(".json").is_file())
             generate_pdf.assert_not_called()
 

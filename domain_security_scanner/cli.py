@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
 from .orchestration import SCAN_GROUPS, resolve_scan_groups
 from .reporting.diff import ReportDiffError, compare_report_files, format_diff
 from .reporting.pdf import generate_pdf
+from .runtime_logging import configure_cli_logging
 from .scanner import Scanner
 from .version import __version__
+
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_group_list(value: str) -> tuple[str, ...]:
@@ -142,6 +147,23 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
 
+    logging_group = parser.add_mutually_exclusive_group()
+    logging_group.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help=(
+            "Increase execution detail. Repeat (-vv) for diagnostic logging."
+        ),
+    )
+    logging_group.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Suppress normal progress and completion output.",
+    )
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -201,12 +223,14 @@ def run_diff(args: argparse.Namespace) -> int:
 
 
 def run_scan(args: argparse.Namespace) -> int:
+    configure_cli_logging(verbose=args.verbose, quiet=args.quiet)
+
     if not args.authorized and not _confirm_scan_authorization(args.domain):
         return 2
 
     selected_groups, selection_warnings = _resolve_scan_groups(args.scan, args.skip)
     for warning in selection_warnings:
-        print(f"[!] Warning: {warning}", file=sys.stderr)
+        logger.warning(f"[!] Warning: {warning}")
 
     try:
         scanner = Scanner(
@@ -215,8 +239,8 @@ def run_scan(args: argparse.Namespace) -> int:
             max_hosts=args.max_hosts,
             scan_groups=selected_groups,
         )
-    except ValueError as e:
-        print(str(e), file=sys.stderr)
+    except ValueError as exc:
+        logger.error(str(exc))
         return 2
 
     scanner.set_scan_selection_context(
@@ -227,11 +251,17 @@ def run_scan(args: argparse.Namespace) -> int:
 
     skipped_effective = [group for group in SCAN_GROUPS if group not in scanner.scan_groups]
 
-    print(f"[+] Web target: {scanner.target_domain}")
-    print(f"[+] Scan groups: {', '.join(scanner.scan_groups) if scanner.scan_groups else '(none)'}")
-    print(f"[+] Skipped groups: {', '.join(skipped_effective) if skipped_effective else '(none)'}")
+    logger.info(f"[+] Web target: {scanner.target_domain}")
+    logger.info(
+        "[+] Scan groups: "
+        + (", ".join(scanner.scan_groups) if scanner.scan_groups else "(none)")
+    )
+    logger.info(
+        "[+] Skipped groups: "
+        + (", ".join(skipped_effective) if skipped_effective else "(none)")
+    )
     scanner.run()
-    print(f"[+] Root/mail domain: {scanner.root_domain}")
+    logger.info(f"[+] Root/mail domain: {scanner.root_domain}")
     report = scanner.to_dict()
 
     prefix = args.out or f"security-report-{scanner.target_domain}"
@@ -243,10 +273,10 @@ def run_scan(args: argparse.Namespace) -> int:
         pdf_path = Path(prefix + ".pdf")
         generate_pdf(report, pdf_path)
 
-    print(f"[+] Score: {report['score']['score']}/100 ({report['score']['label']})")
-    print(f"[+] JSON: {json_path}")
+    logger.info(f"[+] Score: {report['score']['score']}/100 ({report['score']['label']})")
+    logger.info(f"[+] JSON: {json_path}")
     if pdf_path is not None:
-        print(f"[+] PDF:  {pdf_path}")
+        logger.info(f"[+] PDF:  {pdf_path}")
     return 0
 
 
