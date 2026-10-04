@@ -123,10 +123,19 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="PREFIX",
         help="Output file prefix. Defaults to security-report-<domain>.",
     )
-    parser.add_argument(
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         "--json-only",
         action="store_true",
         help="Write the JSON report without generating a PDF report.",
+    )
+    output_group.add_argument(
+        "--json-stdout",
+        action="store_true",
+        help=(
+            "Write the scanner JSON report to stdout only; "
+            "do not create JSON or PDF files."
+        ),
     )
     parser.add_argument(
         "--scan",
@@ -264,17 +273,40 @@ def run_scan(args: argparse.Namespace) -> int:
     logger.info(f"[+] Root/mail domain: {scanner.root_domain}")
     report = scanner.to_dict()
 
-    prefix = args.out or f"security-report-{scanner.target_domain}"
-    json_path = Path(prefix + ".json")
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-
+    report_json = json.dumps(report, ensure_ascii=False, indent=2)
+    json_path = None
     pdf_path = None
-    if not args.json_only:
-        pdf_path = Path(prefix + ".pdf")
-        generate_pdf(report, pdf_path)
+
+    if args.json_stdout:
+        try:
+            stdout_buffer = getattr(sys.stdout, "buffer", None)
+            if stdout_buffer is not None:
+                stdout_buffer.write((report_json + "\n").encode("utf-8"))
+                stdout_buffer.flush()
+            else:
+                sys.stdout.write(report_json + "\n")
+                sys.stdout.flush()
+        except BrokenPipeError:
+            try:
+                sys.stdout.close()
+            except (BrokenPipeError, OSError):
+                pass
+            sys.stdout = None
+            return 0
+    else:
+        prefix = args.out or f"security-report-{scanner.target_domain}"
+        json_path = Path(prefix + ".json")
+        json_path.write_text(report_json, encoding="utf-8")
+
+        if not args.json_only:
+            pdf_path = Path(prefix + ".pdf")
+            generate_pdf(report, pdf_path)
 
     logger.info(f"[+] Score: {report['score']['score']}/100 ({report['score']['label']})")
-    logger.info(f"[+] JSON: {json_path}")
+    if args.json_stdout:
+        logger.info("[+] JSON: stdout")
+    elif json_path is not None:
+        logger.info(f"[+] JSON: {json_path}")
     if pdf_path is not None:
         logger.info(f"[+] PDF:  {pdf_path}")
     return 0
@@ -283,4 +315,12 @@ def run_scan(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if (
+        args.command == "scan"
+        and args.json_stdout
+        and args.out is not None
+    ):
+        parser.error("--json-stdout is stdout-only and cannot be used with --out")
+
     return args.handler(args)
