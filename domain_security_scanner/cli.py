@@ -278,12 +278,21 @@ def run_scan(args: argparse.Namespace) -> int:
     pdf_path = None
 
     if args.json_stdout:
-        stdout_buffer = getattr(sys.stdout, "buffer", None)
-        if stdout_buffer is not None:
-            stdout_buffer.write((report_json + "\n").encode("utf-8"))
-            stdout_buffer.flush()
-        else:
-            sys.stdout.write(report_json + "\n")
+        try:
+            stdout_buffer = getattr(sys.stdout, "buffer", None)
+            if stdout_buffer is not None:
+                stdout_buffer.write((report_json + "\n").encode("utf-8"))
+                stdout_buffer.flush()
+            else:
+                sys.stdout.write(report_json + "\n")
+                sys.stdout.flush()
+        except BrokenPipeError:
+            try:
+                sys.stdout.close()
+            except (BrokenPipeError, OSError):
+                pass
+            sys.stdout = None
+            return 0
     else:
         prefix = args.out or f"security-report-{scanner.target_domain}"
         json_path = Path(prefix + ".json")
