@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,9 @@ from reportlab.platypus import (
 )
 
 from .dns_pdf import dns_posture_rows, status_label
+
+
+logger = logging.getLogger(__name__)
 
 
 REPORT_SCAN_GROUPS = ("domain", "discovery", "mail", "tls", "web", "cms")
@@ -72,7 +76,9 @@ def register_pdf_fonts() -> tuple[str, str]:
             return "LocalUnicode", "LocalUnicode-Bold"
     # Last-resort fallback. PDF still builds, but non-Latin glyph coverage depends
     # on the base font. A warning is emitted for diagnostics.
-    print("[!] Unicode TTF font not found; PDF may not render Polish characters correctly.", file=sys.stderr)
+    logger.warning(
+        "[!] Unicode TTF font not found; PDF may not render Polish characters correctly."
+    )
     return "Helvetica", "Helvetica-Bold"
 
 def p(text: Any) -> str:
