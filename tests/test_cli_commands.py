@@ -62,6 +62,72 @@ class CliCommandStructureTest(unittest.TestCase):
         self.assertEqual(stderr, "")
         scanner.assert_not_called()
 
+    def test_scan_help_groups_options_by_purpose(self):
+        code, stdout, stderr, scanner = self._run(["scan", "--help"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        scanner.assert_not_called()
+
+        groups = (
+            ("Scan target", ("domain",)),
+            ("Authorization", ("--authorized",)),
+            ("Scan selection", ("--scan GROUPS", "--skip GROUPS")),
+            ("Scan limits", ("--max-pages N", "--max-hosts N")),
+            ("Output", ("--out PREFIX", "--json-only", "--json-stdout")),
+            ("Logging", ("-v, --verbose", "-q, --quiet")),
+        )
+        positions = []
+        for heading, options in groups:
+            marker = f"\n{heading}:\n"
+            self.assertIn(marker, stdout)
+            positions.append(stdout.index(marker))
+            section = stdout.split(marker, 1)[1].split("\n\n", 1)[0]
+            for option in options:
+                with self.subTest(heading=heading, option=option):
+                    self.assertIn(option, section)
+
+        self.assertEqual(positions, sorted(positions))
+
+    def test_grouping_preserves_scan_argument_defaults_and_values(self):
+        parser = cli.build_parser()
+        defaults = parser.parse_args(["scan", "example.com"])
+
+        self.assertEqual(defaults.domain, "example.com")
+        self.assertFalse(defaults.authorized)
+        self.assertEqual((defaults.max_pages, defaults.max_hosts), (20, 25))
+        self.assertIsNone(defaults.scan)
+        self.assertIsNone(defaults.skip)
+        self.assertIsNone(defaults.out)
+        self.assertFalse(defaults.json_only)
+        self.assertFalse(defaults.json_stdout)
+        self.assertEqual(defaults.verbose, 0)
+        self.assertFalse(defaults.quiet)
+
+        selected = parser.parse_args([
+            "scan", "example.com", "--authorized",
+            "--scan", "mail,web", "--skip", "mail",
+            "--max-pages", "15", "--max-hosts", "30",
+            "--json-stdout", "-vv",
+        ])
+        self.assertTrue(selected.authorized)
+        self.assertEqual(selected.scan, ("mail", "web"))
+        self.assertEqual(selected.skip, ("mail",))
+        self.assertEqual((selected.max_pages, selected.max_hosts), (15, 30))
+        self.assertTrue(selected.json_stdout)
+        self.assertFalse(selected.json_only)
+        self.assertEqual(selected.verbose, 2)
+
+    def test_grouping_preserves_json_output_mutual_exclusion(self):
+        code, stdout, stderr, scanner = self._run([
+            "scan", "example.com", "--authorized", "--json-only", "--json-stdout",
+        ])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("not allowed with argument", stderr)
+        scanner.assert_not_called()
+
     def test_diff_help_describes_report_arguments_without_scan_options(self):
         code, stdout, stderr, scanner = self._run(["diff", "--help"])
 

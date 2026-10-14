@@ -91,11 +91,14 @@ def _confirm_scan_authorization(domain: str) -> bool:
 
 
 def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
+    target_options = parser.add_argument_group("Scan target")
+    target_options.add_argument(
         "domain",
         help="Domain or subdomain to scan, for example example.com.",
     )
-    parser.add_argument(
+
+    authorization_options = parser.add_argument_group("Authorization")
+    authorization_options.add_argument(
         "--authorized",
         action="store_true",
         help=(
@@ -103,27 +106,51 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
             "authorization prompt."
         ),
     )
-    parser.add_argument(
+
+    selection_options = parser.add_argument_group("Scan selection")
+    selection_options.add_argument(
+        "--scan",
+        type=_parse_group_list,
+        metavar="GROUPS",
+        help=(
+            "Run only the listed comma-separated scan groups. Available: "
+            + ", ".join(SCAN_GROUPS)
+        ),
+    )
+    selection_options.add_argument(
+        "--skip",
+        type=_parse_group_list,
+        metavar="GROUPS",
+        help=(
+            "Skip the listed comma-separated scan groups. Available: "
+            + ", ".join(SCAN_GROUPS)
+        ),
+    )
+
+    limits_options = parser.add_argument_group("Scan limits")
+    limits_options.add_argument(
         "--max-pages",
         type=_parse_scan_limit,
         default=20,
         metavar="N",
         help="Maximum pages to crawl (1-100; default: 20).",
     )
-    parser.add_argument(
+    limits_options.add_argument(
         "--max-hosts",
         type=_parse_scan_limit,
         default=25,
         metavar="N",
         help="Maximum discovered hosts to assess (1-100; default: 25).",
     )
-    parser.add_argument(
+
+    output_options = parser.add_argument_group("Output")
+    output_options.add_argument(
         "--out",
         default=None,
         metavar="PREFIX",
         help="Output file prefix. Defaults to security-report-<domain>.",
     )
-    output_group = parser.add_mutually_exclusive_group()
+    output_group = output_options.add_mutually_exclusive_group()
     output_group.add_argument(
         "--json-only",
         action="store_true",
@@ -137,26 +164,9 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
             "do not create JSON or PDF files."
         ),
     )
-    parser.add_argument(
-        "--scan",
-        type=_parse_group_list,
-        metavar="GROUPS",
-        help=(
-            "Run only the listed comma-separated scan groups. Available: "
-            + ", ".join(SCAN_GROUPS)
-        ),
-    )
-    parser.add_argument(
-        "--skip",
-        type=_parse_group_list,
-        metavar="GROUPS",
-        help=(
-            "Skip the listed comma-separated scan groups. Available: "
-            + ", ".join(SCAN_GROUPS)
-        ),
-    )
 
-    logging_group = parser.add_mutually_exclusive_group()
+    logging_options = parser.add_argument_group("Logging")
+    logging_group = logging_options.add_mutually_exclusive_group()
     logging_group.add_argument(
         "-v",
         "--verbose",
@@ -249,31 +259,46 @@ def run_scan(args: argparse.Namespace) -> int:
             scan_groups=selected_groups,
         )
     except ValueError as exc:
-        logger.error(str(exc))
+        logger.error("Invalid scan target: %s", exc)
         return 2
+    except Exception as exc:
+        logger.error("Cannot initialize scan: %s", exc)
+        return 3
 
-    scanner.set_scan_selection_context(
-        requested=args.scan,
-        skipped=args.skip,
-        warnings_list=selection_warnings,
-    )
+    try:
+        scanner.set_scan_selection_context(
+            requested=args.scan,
+            skipped=args.skip,
+            warnings_list=selection_warnings,
+        )
 
-    skipped_effective = [group for group in SCAN_GROUPS if group not in scanner.scan_groups]
+        skipped_effective = [
+            group for group in SCAN_GROUPS if group not in scanner.scan_groups
+        ]
+        logger.info(f"[+] Web target: {scanner.target_domain}")
+        logger.info(
+            "[+] Scan groups: "
+            + (", ".join(scanner.scan_groups) if scanner.scan_groups else "(none)")
+        )
+        logger.info(
+            "[+] Skipped groups: "
+            + (", ".join(skipped_effective) if skipped_effective else "(none)")
+        )
+        scanner.run()
+        logger.info(f"[+] Root/mail domain: {scanner.root_domain}")
+        report = scanner.to_dict()
+        score = report["score"]
+        score_summary = f"{score['score']}/100 ({score['label']})"
+    except Exception as exc:
+        logger.error("Scan could not complete: %s", exc)
+        return 3
 
-    logger.info(f"[+] Web target: {scanner.target_domain}")
-    logger.info(
-        "[+] Scan groups: "
-        + (", ".join(scanner.scan_groups) if scanner.scan_groups else "(none)")
-    )
-    logger.info(
-        "[+] Skipped groups: "
-        + (", ".join(skipped_effective) if skipped_effective else "(none)")
-    )
-    scanner.run()
-    logger.info(f"[+] Root/mail domain: {scanner.root_domain}")
-    report = scanner.to_dict()
+    try:
+        report_json = json.dumps(report, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.error("Could not serialize JSON report: %s", exc)
+        return 4
 
-    report_json = json.dumps(report, ensure_ascii=False, indent=2)
     json_path = None
     pdf_path = None
 
@@ -293,16 +318,27 @@ def run_scan(args: argparse.Namespace) -> int:
                 pass
             sys.stdout = None
             return 0
+        except (OSError, UnicodeError, ValueError) as exc:
+            logger.error("Could not write JSON to stdout: %s", exc)
+            return 4
     else:
         prefix = args.out or f"security-report-{scanner.target_domain}"
         json_path = Path(prefix + ".json")
-        json_path.write_text(report_json, encoding="utf-8")
+        try:
+            json_path.write_text(report_json, encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            logger.error("Could not write JSON report to %s: %s", json_path, exc)
+            return 4
 
         if not args.json_only:
             pdf_path = Path(prefix + ".pdf")
-            generate_pdf(report, pdf_path)
+            try:
+                generate_pdf(report, pdf_path)
+            except Exception as exc:
+                logger.error("Could not generate PDF report at %s: %s", pdf_path, exc)
+                return 4
 
-    logger.info(f"[+] Score: {report['score']['score']}/100 ({report['score']['label']})")
+    logger.info(f"[+] Score: {score_summary}")
     if args.json_stdout:
         logger.info("[+] JSON: stdout")
     elif json_path is not None:
@@ -323,4 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error("--json-stdout is stdout-only and cannot be used with --out")
 
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except KeyboardInterrupt:
+        print("Interrupted by user.", file=sys.stderr)
+        return 130
