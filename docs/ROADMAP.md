@@ -21,43 +21,27 @@ Normal feature/minor releases target a **two-week iteration**. Security fixes, d
 
 See [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) for the branch, milestone, prerelease, release, and urgent-patch process.
 
-## Current planned release: v1.4.0
+## v1.4.0 — CLI Readiness & Automation (release preparation)
 
-### Theme
+The v1.4 workstreams have been implemented on the release-preparation branch,
+but **v1.4.0 is not yet a published release**. Stable publication requires the
+release PR to `main`, release validation, an annotated `v1.4.0` tag on `main`,
+and a GitHub Release. Do not tag this feature branch or `develop`.
 
-**CLI Readiness & Automation**
+Delivered: explicit `scan` and `diff` commands; improved English help; verbose
+and quiet modes; stream-safe JSON stdout; stable CLI exit codes; installable and
+module entry points; regression tests; and automation/user documentation.
+The `--json-only` mode and semantic report comparison predate v1.4 and were
+reused, not reimplemented, in this release.
 
-Target cadence: **the two-week release iteration following v1.3.0**.
+- [CLI reference](CLI_REFERENCE.md) — supported user-facing interface.
+- [Exit-code contract](CLI_EXIT_CODES.md) — automation and failure semantics.
+- [v1.4 implementation plan](V1_4_CLI_PLAN.md) — preserved historical planning record.
+- [Release checklist](RELEASE_CHECKLIST.md) — remaining gates and publishing workflow.
+- [Changelog](../CHANGELOG.md) — implementation and release summary.
 
-The goal of v1.4.0 is to turn the existing command-line entry point into a predictable, discoverable, automation-friendly interface suitable for normal operator use, shell pipelines, CI, and future packaging.
-
-The release should improve how users invoke and integrate the scanner without materially changing the security checks themselves.
-
-Primary scope:
-
-- explicit command structure for scanning and report comparison;
-- improved built-in help, examples, option grouping, and language consistency;
-- controlled verbose and quiet execution modes;
-- defined stdout/stderr behavior;
-- machine-readable JSON output suitable for shell pipelines;
-- stable execution-error and exit-code semantics;
-- installable CLI and `python -m` entry points;
-- regression tests covering the public CLI contract;
-- user-facing documentation for interactive and automation workflows.
-
-Existing output and comparison work developed before this milestone, including JSON-only output and semantic report comparison, should be treated as foundations rather than duplicated implementations.
-
-The release should preserve compatibility with the current scanner invocation where practical while establishing a cleaner command structure for future development.
-
-See [V1_4_CLI_PLAN.md](V1_4_CLI_PLAN.md) for the detailed implementation scope and release gate.
-
-### v1.4.0 completion criteria
-
-v1.4.0 is ready when an operator can reliably:
-
-> discover the available commands through built-in help; run an authorized scan with predictable progress and error behavior; consume machine-readable JSON without human-oriented output corrupting it; compare existing reports without performing a scan; invoke the scanner through supported Python/package entry points; and depend on documented exit codes and CLI behavior in automation.
-
-CLI changes must not weaken authorization requirements, change security findings merely because presentation mode changes, or turn unavailable external evidence into execution failure when the scanner can represent that evidence as UNKNOWN/VERIFY.
+This roadmap does not repeat the completed v1.4 workstream checklists; GitHub
+milestone/issues and the release checklist track the remaining release gate.
 
 ## Next candidate: v1.5.0
 

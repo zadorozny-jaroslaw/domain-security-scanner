@@ -1,5 +1,14 @@
 # v1.4.0 CLI implementation plan
 
+> **Status (2026-10-14): historical implementation plan; release pending.**
+> The v1.4 CLI workstreams are implemented in the release-preparation branch.
+> This plan is retained for design context, not as current user documentation
+> or proof of a published tag. For implemented behavior see
+> [CLI_REFERENCE.md](CLI_REFERENCE.md) and
+> [CLI_EXIT_CODES.md](CLI_EXIT_CODES.md); for publication see
+> [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+
+
 ## Release theme
 
 **CLI Readiness & Automation**
