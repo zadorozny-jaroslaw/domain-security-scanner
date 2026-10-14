@@ -14,6 +14,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Add installable Python project metadata with `domeval` as the preferred console command and `domain-security-scan` as a compatibility alias.
 - Add `python -m domain_security_scanner` as a supported module entry point while retaining `domain_security_scan.py` as the source-tree compatibility wrapper.
 - Add entry-point regression tests and CI smoke coverage for installed console commands and module execution.
+- Add deterministic subprocess-level CLI contract tests for exit statuses, stdout/stderr separation, output failures, interruption handling, and installed console aliases.
 
 ### Changed
 
