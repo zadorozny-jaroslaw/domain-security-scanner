@@ -283,7 +283,12 @@ def run_scan(args: argparse.Namespace) -> int:
         logger.error("Scan could not complete: %s", exc)
         return 3
 
-    report_json = json.dumps(report, ensure_ascii=False, indent=2)
+    try:
+        report_json = json.dumps(report, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.error("Could not serialize JSON report: %s", exc)
+        return 4
+
     json_path = None
     pdf_path = None
 
@@ -303,14 +308,25 @@ def run_scan(args: argparse.Namespace) -> int:
                 pass
             sys.stdout = None
             return 0
+        except (OSError, UnicodeError, ValueError) as exc:
+            logger.error("Could not write JSON to stdout: %s", exc)
+            return 4
     else:
         prefix = args.out or f"security-report-{scanner.target_domain}"
         json_path = Path(prefix + ".json")
-        json_path.write_text(report_json, encoding="utf-8")
+        try:
+            json_path.write_text(report_json, encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            logger.error("Could not write JSON report to %s: %s", json_path, exc)
+            return 4
 
         if not args.json_only:
             pdf_path = Path(prefix + ".pdf")
-            generate_pdf(report, pdf_path)
+            try:
+                generate_pdf(report, pdf_path)
+            except Exception as exc:
+                logger.error("Could not generate PDF report at %s: %s", pdf_path, exc)
+                return 4
 
     logger.info(f"[+] Score: {score_summary}")
     if args.json_stdout:

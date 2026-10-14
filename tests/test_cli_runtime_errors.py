@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import io
+import json
+import tempfile
+from pathlib import Path
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
@@ -119,6 +122,95 @@ class CliRuntimeFailureTest(unittest.TestCase):
         self.assertIn('"ACTION"', out)
         self.assertIn('"VERIFY"', out)
         self.assertIn("Score: 92/100", err)
+
+
+class CliOutputFailureTest(unittest.TestCase):
+    def _run_file_mode(self, prefix, *, scanner=_ScannerStub, pdf_error=None, json_only=False):
+        stderr, stdout = io.StringIO(), io.StringIO()
+        args = ["scan", "example.com", "--authorized", "--out", str(prefix)]
+        if json_only:
+            args.append("--json-only")
+        with (
+            patch.object(cli, "Scanner", scanner),
+            patch.object(cli, "generate_pdf", side_effect=pdf_error),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = cli.main(args)
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_json_serialization_failure_returns_four(self):
+        class NonSerializableScan(_ScannerStub):
+            def to_dict(self):
+                report = super().to_dict()
+                report["unserializable"] = object()
+                return report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "report"
+            code, out, err = self._run_file_mode(
+                prefix, scanner=NonSerializableScan, json_only=True
+            )
+            self.assertFalse(prefix.with_suffix(".json").exists())
+        self.assertEqual((code, out), (4, ""))
+        self.assertIn("Could not serialize JSON report", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_json_write_permission_failure_returns_four_even_when_quiet(self):
+        err = io.StringIO()
+        with (
+            patch.object(cli, "Scanner", _ScannerStub),
+            patch.object(cli.Path, "write_text", side_effect=PermissionError("denied")),
+            redirect_stderr(err),
+        ):
+            code = cli.main(
+                ["scan", "example.com", "--authorized", "--json-only", "-q"]
+            )
+        self.assertEqual(code, 4)
+        self.assertIn("Could not write JSON report", err.getvalue())
+        self.assertIn("denied", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_pdf_failure_returns_four_and_json_is_still_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "pdf-failure"
+            code, out, err = self._run_file_mode(
+                prefix, pdf_error=OSError("pdf denied")
+            )
+            saved = json.loads(prefix.with_suffix(".json").read_text())
+        self.assertEqual((code, out), (4, ""))
+        self.assertEqual(saved["score"]["score"], 92)
+        self.assertIn("Could not generate PDF report", err)
+        self.assertIn("pdf denied", err)
+
+    def test_pdf_keyboard_interrupt_returns_130(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out, err = self._run_file_mode(
+                Path(tmp) / "report", pdf_error=KeyboardInterrupt
+            )
+        self.assertEqual((code, out), (130, ""))
+        self.assertIn("Interrupted by user", err)
+
+    def test_stdout_write_failure_returns_four(self):
+        class FailingStdout:
+            def write(self, chunk):
+                raise OSError("stdout unavailable")
+
+            def flush(self):
+                pass
+
+        err = io.StringIO()
+        with (
+            patch.object(cli, "Scanner", _ScannerStub),
+            patch.object(cli.sys, "stdout", FailingStdout()),
+            redirect_stderr(err),
+        ):
+            code = cli.main(
+                ["scan", "example.com", "--authorized", "--json-stdout"]
+            )
+        self.assertEqual(code, 4)
+        self.assertIn("Could not write JSON to stdout", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
 
 
 if __name__ == "__main__":
