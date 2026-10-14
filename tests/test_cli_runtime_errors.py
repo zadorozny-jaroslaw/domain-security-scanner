@@ -213,5 +213,51 @@ class CliOutputFailureTest(unittest.TestCase):
         self.assertNotIn("Traceback", err.getvalue())
 
 
+class CliDiffRuntimeContractTest(unittest.TestCase):
+    def _run_diff(self, old_path, new_path):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cli.main(["diff", str(old_path), str(new_path)])
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_invalid_utf8_report_returns_two_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = Path(tmp) / "invalid-utf8.json"
+            new = Path(tmp) / "valid.json"
+            old.write_bytes(b"\xff\xfe")
+            new.write_text(
+                json.dumps({"target_domain": "example.com", "score": {}, "checks": []}),
+                encoding="utf-8",
+            )
+            code, out, err = self._run_diff(old, new)
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("cannot decode", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_missing_diff_file_returns_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out, err = self._run_diff(
+                Path(tmp) / "missing.json", Path(tmp) / "also-missing.json"
+            )
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("Diff error", err)
+
+    def test_diff_unchanged_and_changed_exit_codes_remain_zero_and_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "a.json"
+            b = Path(tmp) / "b.json"
+            template = {"target_domain": "example.com", "checks": [], "score": {"score": 100}}
+            a.write_text(json.dumps(template), encoding="utf-8")
+            b.write_text(json.dumps(template), encoding="utf-8")
+            equal_code, equal_out, equal_err = self._run_diff(a, b)
+            template["score"]["score"] = 50
+            b.write_text(json.dumps(template), encoding="utf-8")
+            changed_code, changed_out, changed_err = self._run_diff(a, b)
+        self.assertEqual((equal_code, changed_code), (0, 1))
+        self.assertIn("No meaningful differences", equal_out)
+        self.assertIn("CHANGED", changed_out)
+        self.assertEqual((equal_err, changed_err), ("", ""))
+
+
 if __name__ == "__main__":
     unittest.main()
