@@ -91,11 +91,14 @@ def _confirm_scan_authorization(domain: str) -> bool:
 
 
 def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
+    target_options = parser.add_argument_group("Scan target")
+    target_options.add_argument(
         "domain",
         help="Domain or subdomain to scan, for example example.com.",
     )
-    parser.add_argument(
+
+    authorization_options = parser.add_argument_group("Authorization")
+    authorization_options.add_argument(
         "--authorized",
         action="store_true",
         help=(
@@ -103,27 +106,51 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
             "authorization prompt."
         ),
     )
-    parser.add_argument(
+
+    selection_options = parser.add_argument_group("Scan selection")
+    selection_options.add_argument(
+        "--scan",
+        type=_parse_group_list,
+        metavar="GROUPS",
+        help=(
+            "Run only the listed comma-separated scan groups. Available: "
+            + ", ".join(SCAN_GROUPS)
+        ),
+    )
+    selection_options.add_argument(
+        "--skip",
+        type=_parse_group_list,
+        metavar="GROUPS",
+        help=(
+            "Skip the listed comma-separated scan groups. Available: "
+            + ", ".join(SCAN_GROUPS)
+        ),
+    )
+
+    limits_options = parser.add_argument_group("Scan limits")
+    limits_options.add_argument(
         "--max-pages",
         type=_parse_scan_limit,
         default=20,
         metavar="N",
         help="Maximum pages to crawl (1-100; default: 20).",
     )
-    parser.add_argument(
+    limits_options.add_argument(
         "--max-hosts",
         type=_parse_scan_limit,
         default=25,
         metavar="N",
         help="Maximum discovered hosts to assess (1-100; default: 25).",
     )
-    parser.add_argument(
+
+    output_options = parser.add_argument_group("Output")
+    output_options.add_argument(
         "--out",
         default=None,
         metavar="PREFIX",
         help="Output file prefix. Defaults to security-report-<domain>.",
     )
-    output_group = parser.add_mutually_exclusive_group()
+    output_group = output_options.add_mutually_exclusive_group()
     output_group.add_argument(
         "--json-only",
         action="store_true",
@@ -137,26 +164,9 @@ def _add_scan_arguments(parser: argparse.ArgumentParser) -> None:
             "do not create JSON or PDF files."
         ),
     )
-    parser.add_argument(
-        "--scan",
-        type=_parse_group_list,
-        metavar="GROUPS",
-        help=(
-            "Run only the listed comma-separated scan groups. Available: "
-            + ", ".join(SCAN_GROUPS)
-        ),
-    )
-    parser.add_argument(
-        "--skip",
-        type=_parse_group_list,
-        metavar="GROUPS",
-        help=(
-            "Skip the listed comma-separated scan groups. Available: "
-            + ", ".join(SCAN_GROUPS)
-        ),
-    )
 
-    logging_group = parser.add_mutually_exclusive_group()
+    logging_options = parser.add_argument_group("Logging")
+    logging_group = logging_options.add_mutually_exclusive_group()
     logging_group.add_argument(
         "-v",
         "--verbose",
@@ -178,9 +188,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Low-impact external domain security hygiene scanner.",
         epilog=(
+            "Commands:\n"
+            "  scan  Assess a domain you own or are authorized to scan.\n"
+            "  diff  Compare saved JSON reports without a network scan.\n\n"
             "Examples:\n"
+            "  domeval scan example.com\n"
             "  domeval scan example.com --authorized\n"
-            "  domeval diff previous.json current.json"
+            "  domeval diff previous.json current.json\n\n"
+            "Use 'domeval COMMAND --help' for command-specific options."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -196,6 +211,23 @@ def build_parser() -> argparse.ArgumentParser:
         "scan",
         help="Scan an authorized domain.",
         description="Run a security hygiene scan against an authorized domain.",
+        epilog=(
+            "Examples:\n"
+            "  domeval scan example.com\n"
+            "  domeval scan example.com --authorized --scan mail,web\n"
+            "  domeval scan example.com --authorized --json-only\n"
+            "  domeval scan example.com --authorized --json-stdout | jq '.score.score'\n\n"
+            "Notes:\n"
+            "  Scan only domains you own or have explicit permission to assess.\n"
+            "  Without --authorized, interactive scans ask for confirmation;\n"
+            "  non-interactive scans require --authorized.\n"
+            "  By default, all six scan groups run; --skip overrides --scan.\n"
+            "  Default files: security-report-<domain>.json and .pdf.\n"
+            "  --json-only writes a JSON file without a PDF.\n"
+            "  --json-stdout writes JSON to stdout and no files; it cannot use\n"
+            "  --json-only or --out. Progress and diagnostics use stderr."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_scan_arguments(scan_parser)
     scan_parser.set_defaults(handler=run_scan)
@@ -204,6 +236,14 @@ def build_parser() -> argparse.ArgumentParser:
         "diff",
         help="Compare two existing JSON reports.",
         description="Compare two existing JSON reports without running a scan.",
+        epilog=(
+            "Example:\n"
+            "  domeval diff previous.json current.json\n\n"
+            "Notes:\n"
+            "  Reads local JSON files only; no network scan or authorization.\n"
+            "  Exit codes: 0 = equivalent, 1 = changed, 2 = invalid input."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     diff_parser.add_argument(
         "old_report",

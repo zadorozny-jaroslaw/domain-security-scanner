@@ -12,7 +12,7 @@ def normalize_domain(value: str) -> str:
         value = urlparse(value).hostname or value
     value = value.split("/")[0].strip(".")
     if not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z0-9\-]{2,63}", value):
-        raise ValueError(f"Nieprawidłowa domena: {value}")
+        raise ValueError(f"Invalid domain: {value}")
     return value
 
 COMMON_MULTI_LABEL_SUFFIXES = {

@@ -20,6 +20,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Make a hard cut from the earlier flat CLI forms: scans now use `scan DOMAIN ...` and report comparison uses `diff OLD_JSON NEW_JSON`.
 - Reject malformed or removed command forms during argument parsing before scanner activity begins.
 - Improve CLI help with English descriptions, representative examples, command-specific options, and compact `1-100` scan-limit descriptions.
+- Group `scan --help` options by purpose and add task-oriented examples and safety/output guidance to top-level, `scan`, and `diff` help.
+- Standardize invalid-domain validation messages in English without changing domain acceptance rules or scan error codes.
 - Keep `diff` as a local report operation that does not require scan authorization.
 - Prefer the shorter `domeval` executable in user-facing examples while retaining the longer installed alias and existing package/file naming conventions.
 - Install the project itself in CI so package metadata and generated console entry points are exercised on supported Windows and Linux runners.
