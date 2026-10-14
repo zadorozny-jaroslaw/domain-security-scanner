@@ -1,6 +1,6 @@
 # Domain Security Scanner
 
-**Version 1.3.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
+**Version 1.4.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
 
 > **Source-available / non-commercial license.** This project is free for personal, educational, research, evaluation, testing, and internal non-commercial use. Commercial use requires separate written permission from Jarosław Zadorożny. See [LICENSE](LICENSE).
 >
@@ -115,6 +115,21 @@ domeval scan example.com --authorized --json-only
 
 `--json-only` changes only the output artifacts. It does not change scan scope, findings, evidence collection, or scoring.
 
+For a JSON pipeline with no output files, use `--json-stdout`. Human progress and
+warnings go to stderr, not into the report JSON on stdout:
+
+```bash
+domeval scan example.com --authorized --json-stdout | jq '.score.score'
+```
+
+`jq` is optional and must be installed separately. `--json-stdout` cannot be
+combined with `--json-only` or `--out`. For reliable CI use, capture the
+scanner's exit status before interpreting the JSON rather than assuming that
+success from the last command in a pipeline means the scan completed.
+
+See [CLI reference](docs/CLI_REFERENCE.md) for logging modes, Windows/PowerShell
+and POSIX shell examples, file naming, and the full command-line contract.
+
 Compare two existing JSON reports without performing a scan:
 
 ```bash
@@ -141,9 +156,13 @@ All four entry points delegate to the same CLI implementation and use the same c
 ## Usage
 
 ```text
-domeval scan DOMAIN [--authorized] [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX] [--json-only]
+domeval scan DOMAIN [--authorized] [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX] [--json-only | --json-stdout] [-v | -vv | -q]
 domeval diff OLD_JSON NEW_JSON
 ```
+
+Use `domeval --help`, `domeval scan --help`, and `domeval diff --help` for the
+current built-in help. Option details and defaults are collected in the
+[CLI reference](docs/CLI_REFERENCE.md).
 
 The CLI uses explicit commands. The previous flat script forms (`python domain_security_scan.py DOMAIN ...` and `python domain_security_scan.py --diff ...`) are no longer accepted.
 
@@ -168,6 +187,14 @@ domeval scan example.com --authorized --scan mail,web --skip mail
 # Generate structured JSON without creating a PDF
 domeval scan example.com --authorized --json-only
 
+# Stream machine-readable JSON without generating files
+domeval scan example.com --authorized --json-stdout
+
+# Extra progress, detailed diagnostics, or quiet operation
+domeval scan example.com --authorized -v --json-only
+domeval scan example.com --authorized -vv --json-only
+domeval scan example.com --authorized --quiet --json-stdout
+
 # Compare two existing JSON reports; no scan authorization is needed
 domeval diff previous.json current.json
 
@@ -176,6 +203,21 @@ domeval scan example.com --authorized --out customer-example
 ```
 
 Authorization is required for scans. In an interactive terminal, omitting `--authorized` triggers a confirmation prompt before scanning. In non-interactive use, missing `--authorized` fails immediately with exit code `2` and advises rerunning with the flag. The `--authorized` flag skips the prompt. The `diff` command reads only local JSON reports and never requires scan authorization.
+
+Default scans write `security-report-<domain>.json` and
+`security-report-<domain>.pdf` (or `<PREFIX>.json` and `<PREFIX>.pdf` with
+`--out PREFIX`). `-v` increases operational detail, `-vv` enables diagnostics,
+and `--quiet` suppresses routine status/warnings while keeping errors and
+explicitly requested JSON. These logging modes are mutually exclusive.
+
+**Exit statuses describe command execution, not the target's security.** A
+completed scan returns `0` even if it includes `ACTION` or `REVIEW` findings;
+inconclusive `VERIFY`/`UNKNOWN` evidence does not by itself cause failure. Scan
+errors use `2` for invalid usage/authorization, `3` for unrecoverable scanning,
+`4` for output failure, and `130` for interruption. For `diff`, `0` means no
+meaningful differences, `1` means differences, and `2` means invalid input.
+See [CLI exit codes](docs/CLI_EXIT_CODES.md) and the
+[CLI reference](docs/CLI_REFERENCE.md) for details and safe automation examples.
 
 ## Scan groups
 

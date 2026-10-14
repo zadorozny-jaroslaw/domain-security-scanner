@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-14
+
 ### Added
 
 - Add explicit `scan` and `diff` CLI commands with command-specific arguments and dedicated execution handlers.
@@ -15,13 +17,18 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Add `python -m domain_security_scanner` as a supported module entry point while retaining `domain_security_scan.py` as the source-tree compatibility wrapper.
 - Add entry-point regression tests and CI smoke coverage for installed console commands and module execution.
 - Add deterministic subprocess-level CLI contract tests for exit statuses, stdout/stderr separation, output failures, interruption handling, and installed console aliases.
+- Add a CLI reference covering supported commands, flags, output streams, report naming, exit statuses, and POSIX/PowerShell automation workflows.
+- Add `-v` and `-vv` execution-detail levels and `--quiet` to suppress normal progress while retaining errors.
+- Add `--json-stdout` to stream report JSON without creating files, keeping human-oriented scan output on stderr.
 
 ### Changed
 
 - Make a hard cut from the earlier flat CLI forms: scans now use `scan DOMAIN ...` and report comparison uses `diff OLD_JSON NEW_JSON`.
 - Reject malformed or removed command forms during argument parsing before scanner activity begins.
+- Standardize scan exit codes for success (`0`), usage or authorization errors (`2`), scan failures (`3`), output failures (`4`), and interruption (`130`), with controlled runtime-error messages; retain separate `diff` exit semantics.
 - Improve CLI help with English descriptions, representative examples, command-specific options, and compact `1-100` scan-limit descriptions.
 - Group `scan --help` options by purpose and add task-oriented examples and safety/output guidance to top-level, `scan`, and `diff` help.
+- Update README usage and JSON stdout examples to match the implemented CLI contract, with links to the authoritative reference and exit-code documentation.
 - Standardize invalid-domain validation messages in English without changing domain acceptance rules or scan error codes.
 - Keep `diff` as a local report operation that does not require scan authorization.
 - Prefer the shorter `domeval` executable in user-facing examples while retaining the longer installed alias and existing package/file naming conventions.
