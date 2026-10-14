@@ -249,31 +249,46 @@ def run_scan(args: argparse.Namespace) -> int:
             scan_groups=selected_groups,
         )
     except ValueError as exc:
-        logger.error(str(exc))
+        logger.error("Invalid scan target: %s", exc)
         return 2
+    except Exception as exc:
+        logger.error("Cannot initialize scan: %s", exc)
+        return 3
 
-    scanner.set_scan_selection_context(
-        requested=args.scan,
-        skipped=args.skip,
-        warnings_list=selection_warnings,
-    )
+    try:
+        scanner.set_scan_selection_context(
+            requested=args.scan,
+            skipped=args.skip,
+            warnings_list=selection_warnings,
+        )
 
-    skipped_effective = [group for group in SCAN_GROUPS if group not in scanner.scan_groups]
+        skipped_effective = [
+            group for group in SCAN_GROUPS if group not in scanner.scan_groups
+        ]
+        logger.info(f"[+] Web target: {scanner.target_domain}")
+        logger.info(
+            "[+] Scan groups: "
+            + (", ".join(scanner.scan_groups) if scanner.scan_groups else "(none)")
+        )
+        logger.info(
+            "[+] Skipped groups: "
+            + (", ".join(skipped_effective) if skipped_effective else "(none)")
+        )
+        scanner.run()
+        logger.info(f"[+] Root/mail domain: {scanner.root_domain}")
+        report = scanner.to_dict()
+        score = report["score"]
+        score_summary = f"{score['score']}/100 ({score['label']})"
+    except Exception as exc:
+        logger.error("Scan could not complete: %s", exc)
+        return 3
 
-    logger.info(f"[+] Web target: {scanner.target_domain}")
-    logger.info(
-        "[+] Scan groups: "
-        + (", ".join(scanner.scan_groups) if scanner.scan_groups else "(none)")
-    )
-    logger.info(
-        "[+] Skipped groups: "
-        + (", ".join(skipped_effective) if skipped_effective else "(none)")
-    )
-    scanner.run()
-    logger.info(f"[+] Root/mail domain: {scanner.root_domain}")
-    report = scanner.to_dict()
+    try:
+        report_json = json.dumps(report, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.error("Could not serialize JSON report: %s", exc)
+        return 4
 
-    report_json = json.dumps(report, ensure_ascii=False, indent=2)
     json_path = None
     pdf_path = None
 
@@ -293,16 +308,27 @@ def run_scan(args: argparse.Namespace) -> int:
                 pass
             sys.stdout = None
             return 0
+        except (OSError, UnicodeError, ValueError) as exc:
+            logger.error("Could not write JSON to stdout: %s", exc)
+            return 4
     else:
         prefix = args.out or f"security-report-{scanner.target_domain}"
         json_path = Path(prefix + ".json")
-        json_path.write_text(report_json, encoding="utf-8")
+        try:
+            json_path.write_text(report_json, encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            logger.error("Could not write JSON report to %s: %s", json_path, exc)
+            return 4
 
         if not args.json_only:
             pdf_path = Path(prefix + ".pdf")
-            generate_pdf(report, pdf_path)
+            try:
+                generate_pdf(report, pdf_path)
+            except Exception as exc:
+                logger.error("Could not generate PDF report at %s: %s", pdf_path, exc)
+                return 4
 
-    logger.info(f"[+] Score: {report['score']['score']}/100 ({report['score']['label']})")
+    logger.info(f"[+] Score: {score_summary}")
     if args.json_stdout:
         logger.info("[+] JSON: stdout")
     elif json_path is not None:
@@ -323,4 +349,8 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error("--json-stdout is stdout-only and cannot be used with --out")
 
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except KeyboardInterrupt:
+        print("Interrupted by user.", file=sys.stderr)
+        return 130
