@@ -80,14 +80,46 @@ covers certificate service identity.
   smoke test before release. The release date and issue scope remain subject to
   milestone review; completing v1.4.0 publication is a separate prerequisite.
 
+## Next candidate: v1.6.0
+
+### Theme
+
+**DNS SVCB/HTTPS Service-Binding Visibility**
+
+Proposed foundation: [RFC 9460](https://www.rfc-editor.org/info/rfc9460).
+Following v1.5 TLS/certificate posture, v1.6 would add bounded, passive DNS
+service-binding evidence for the **exact requested web target**. The first
+iteration should prioritize HTTPS (type 65) records for the assessed HTTPS
+origin; general SVCB (type 64) support for other services is a later option
+that needs a defined, safe query-name mapping. No new scan group is assumed.
+
+Candidate scope:
+
+- distinguish AliasMode (priority 0) and ServiceMode (priority > 0), including
+  targets, priorities, record sets, and bounded alias handling;
+- parse and retain recognized SvcParams such as `mandatory`, `alpn`,
+  `no-default-alpn`, `port`, `ipv4hint`, and `ipv6hint`; preserve unknown keys
+  without inventing security conclusions;
+- separate valid, malformed, unusable, absent, and unobservable DNS evidence;
+- expose additive, advisory JSON/PDF evidence consistent with existing scan
+  selection, provenance, and `VERIFY`/`UNKNOWN` rules;
+- use only bounded DNS queries. Do not connect to advertised targets or ports,
+  interpret address hints as verified reachability, or treat record absence as
+  a security failure.
+
+See [the preliminary v1.6 plan](V1_6_SVCB_HTTPS_PLAN.md) for potential work
+slices, uncertainties, safe non-goals, and a draft acceptance gate. The final
+scope and effort should be selected through GitHub issues after v1.5.
+
 ## Later candidates
 
-Potential later release themes include:
+Other possible future release themes include:
 
 - deeper Web policy analysis;
 - additional mail standards and operational checks;
-- DANE/TLSA;
-- SVCB/HTTPS records;
+- DNSSEC-backed DANE/TLSA (separate trust and certificate-validation project);
+- broader SVCB scheme mappings beyond the HTTPS origin;
 - JSON schema/versioning improvements.
 
-These are directional ideas, not commitments. Prefer a coherent release theme over adding unrelated checks simply because an RFC exists.
+These are directional ideas, not commitments. Prefer one cohesive release theme
+over adding unrelated checks simply because an RFC exists.
