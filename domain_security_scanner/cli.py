@@ -188,9 +188,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Low-impact external domain security hygiene scanner.",
         epilog=(
+            "Commands:\n"
+            "  scan  Assess a domain you own or are authorized to scan.\n"
+            "  diff  Compare saved JSON reports without a network scan.\n\n"
             "Examples:\n"
+            "  domeval scan example.com\n"
             "  domeval scan example.com --authorized\n"
-            "  domeval diff previous.json current.json"
+            "  domeval diff previous.json current.json\n\n"
+            "Use 'domeval COMMAND --help' for command-specific options."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -206,6 +211,23 @@ def build_parser() -> argparse.ArgumentParser:
         "scan",
         help="Scan an authorized domain.",
         description="Run a security hygiene scan against an authorized domain.",
+        epilog=(
+            "Examples:\n"
+            "  domeval scan example.com\n"
+            "  domeval scan example.com --authorized --scan mail,web\n"
+            "  domeval scan example.com --authorized --json-only\n"
+            "  domeval scan example.com --authorized --json-stdout | jq '.score.score'\n\n"
+            "Notes:\n"
+            "  Scan only domains you own or have explicit permission to assess.\n"
+            "  Without --authorized, interactive scans ask for confirmation;\n"
+            "  non-interactive scans require --authorized.\n"
+            "  By default, all six scan groups run; --skip overrides --scan.\n"
+            "  Default files: security-report-<domain>.json and .pdf.\n"
+            "  --json-only writes a JSON file without a PDF.\n"
+            "  --json-stdout writes JSON to stdout and no files; it cannot use\n"
+            "  --json-only or --out. Progress and diagnostics use stderr."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_scan_arguments(scan_parser)
     scan_parser.set_defaults(handler=run_scan)
@@ -214,6 +236,14 @@ def build_parser() -> argparse.ArgumentParser:
         "diff",
         help="Compare two existing JSON reports.",
         description="Compare two existing JSON reports without running a scan.",
+        epilog=(
+            "Example:\n"
+            "  domeval diff previous.json current.json\n\n"
+            "Notes:\n"
+            "  Reads local JSON files only; no network scan or authorization.\n"
+            "  Exit codes: 0 = equivalent, 1 = changed, 2 = invalid input."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     diff_parser.add_argument(
         "old_report",

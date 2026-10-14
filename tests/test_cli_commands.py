@@ -143,6 +143,60 @@ class CliCommandStructureTest(unittest.TestCase):
         self.assertEqual(stderr, "")
         scanner.assert_not_called()
 
+    def test_help_short_flag_matches_long_flag_for_every_command(self):
+        for prefix in ([], ["scan"], ["diff"]):
+            with self.subTest(command=prefix or ["top-level"]):
+                short_code, short_out, short_err, short_scanner = self._run(
+                    [*prefix, "-h"]
+                )
+                long_code, long_out, long_err, long_scanner = self._run(
+                    [*prefix, "--help"]
+                )
+                self.assertEqual((short_code, long_code), (0, 0))
+                self.assertEqual(short_out, long_out)
+                self.assertEqual((short_err, long_err), ("", ""))
+                short_scanner.assert_not_called()
+                long_scanner.assert_not_called()
+
+    def test_top_level_help_explains_commands_and_further_help(self):
+        code, stdout, stderr, scanner = self._run(["--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("Commands:", stdout)
+        self.assertIn("scan  Assess a domain", stdout)
+        self.assertIn("diff  Compare saved JSON reports", stdout)
+        self.assertIn("domeval scan example.com", stdout)
+        self.assertIn("domeval diff previous.json current.json", stdout)
+        self.assertIn("domeval COMMAND --help", stdout)
+        self.assertEqual(stderr, "")
+        scanner.assert_not_called()
+
+    def test_scan_help_has_task_examples_defaults_and_authorization(self):
+        code, stdout, stderr, scanner = self._run(["scan", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("domeval scan example.com\n", stdout)
+        self.assertIn("--authorized --scan mail,web", stdout)
+        self.assertIn("--authorized --json-only", stdout)
+        self.assertIn("--json-stdout | jq '.score.score'", stdout)
+        self.assertIn("all six scan groups run", stdout)
+        self.assertIn("--skip overrides --scan", stdout)
+        self.assertIn("non-interactive scans require --authorized", stdout)
+        self.assertIn("explicit permission to assess", stdout)
+        self.assertIn("security-report-<domain>.json and .pdf", stdout)
+        self.assertIn("Progress and diagnostics use stderr", stdout)
+        self.assertIn("--json-only or --out", stdout)
+        self.assertEqual(stderr, "")
+        scanner.assert_not_called()
+
+    def test_diff_help_has_local_example_and_exit_statuses(self):
+        code, stdout, stderr, scanner = self._run(["diff", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("domeval diff previous.json current.json", stdout)
+        self.assertIn("Reads local JSON files only", stdout)
+        self.assertIn("no network scan or authorization", stdout)
+        self.assertIn("Exit codes: 0 = equivalent, 1 = changed, 2 = invalid input", stdout)
+        self.assertEqual(stderr, "")
+        scanner.assert_not_called()
+
     def test_verbose_and_quiet_are_mutually_exclusive(self):
         code, stdout, stderr, scanner = self._run(
             ["scan", "example.com", "--authorized", "-v", "--quiet"]
