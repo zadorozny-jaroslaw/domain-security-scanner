@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-14
+
 ### Added
 
 - Add explicit `scan` and `diff` CLI commands with command-specific arguments and dedicated execution handlers.

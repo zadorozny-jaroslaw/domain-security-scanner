@@ -1,7 +1,7 @@
 # CLI exit status contract
 
-This document describes the exit statuses of `domeval` on the v1.4 development
-branch. It also applies to `domain-security-scan`,
+This document describes the exit statuses of `domeval` in version 1.4.0.
+It also applies to `domain-security-scan`,
 `python -m domain_security_scanner` and `python domain_security_scan.py`,
 which delegate to the same CLI implementation.
 

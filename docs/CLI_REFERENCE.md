@@ -1,6 +1,6 @@
 # Command-line interface reference
 
-This document describes the supported CLI interface on the v1.4 development branch.
+This document describes the supported CLI interface for version 1.4.0.
 The command examples use `domeval`, the preferred installed executable. The
 [README](../README.md) is the getting-started guide, and
 [CLI_EXIT_CODES.md](CLI_EXIT_CODES.md) is the authoritative process-exit-status
