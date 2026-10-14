@@ -1,6 +1,6 @@
 # Domain Security Scanner
 
-**Version 1.3.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
+**Version 1.4.0** - low-impact external security posture checks for domains you own or are explicitly authorized to assess.
 
 > **Source-available / non-commercial license.** This project is free for personal, educational, research, evaluation, testing, and internal non-commercial use. Commercial use requires separate written permission from Jarosław Zadorożny. See [LICENSE](LICENSE).
 >
@@ -73,23 +73,31 @@ Activate it:
 source .venv/bin/activate
 ```
 
-Install dependencies:
+Install the scanner and its dependencies into the active environment:
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install .
 ```
 
 Check the installed project version:
 
 ```bash
-python domain_security_scan.py --version
+domeval --version
 ```
 
-Run an authorized scan:
+Run a scan interactively:
 
 ```bash
-python domain_security_scan.py example.com --authorized
+domeval scan example.com
+```
+
+If `--authorized` is omitted in an interactive terminal, the scanner shows the target and asks for explicit confirmation before any scan activity begins. Pressing Enter or answering anything other than `y` / `yes` cancels the scan.
+
+For scripts, CI, pipes, or other non-interactive use, authorization must be confirmed explicitly with `--authorized`:
+
+```bash
+domeval scan example.com --authorized
 ```
 
 The default output is:
@@ -102,52 +110,114 @@ security-report-example.com.json
 To generate only the structured JSON report and skip PDF generation:
 
 ```bash
-python domain_security_scan.py example.com --authorized --json-only
+domeval scan example.com --authorized --json-only
 ```
 
 `--json-only` changes only the output artifacts. It does not change scan scope, findings, evidence collection, or scoring.
 
+For a JSON pipeline with no output files, use `--json-stdout`. Human progress and
+warnings go to stderr, not into the report JSON on stdout:
+
+```bash
+domeval scan example.com --authorized --json-stdout | jq '.score.score'
+```
+
+`jq` is optional and must be installed separately. `--json-stdout` cannot be
+combined with `--json-only` or `--out`. For reliable CI use, capture the
+scanner's exit status before interpreting the JSON rather than assuming that
+success from the last command in a pipeline means the scan completed.
+
+See [CLI reference](docs/CLI_REFERENCE.md) for logging modes, Windows/PowerShell
+and POSIX shell examples, file naming, and the full command-line contract.
+
 Compare two existing JSON reports without performing a scan:
 
 ```bash
-python domain_security_scan.py --diff previous.json current.json
+domeval diff previous.json current.json
 ```
 
-Diff mode ignores known volatile metadata such as `generated_at`, normalizes known set-like scanner collections, and reports meaningful added, removed, and changed values. It does not require `--authorized` because it performs no network activity. Exit code `0` means the reports are semantically equivalent, `1` means meaningful differences were found, and `2` means the comparison input or arguments were invalid.
+Diff mode ignores known volatile metadata such as `generated_at`, normalizes known set-like scanner collections, and reports meaningful added, removed, and changed values. It does not require authorization because it performs no network activity. Exit code `0` means the reports are semantically equivalent, `1` means meaningful differences were found, and `2` means the comparison input or arguments were invalid.
+
+### Supported entry points
+
+`domeval` is the preferred installed command. The longer `domain-security-scan` name remains available as a compatibility alias for existing references and automation.
+
+The same CLI can also be invoked through the Python package module or the source-tree compatibility script:
+
+```text
+domeval ...
+domain-security-scan ...
+python -m domain_security_scanner ...
+python domain_security_scan.py ...
+```
+
+All four entry points delegate to the same CLI implementation and use the same command structure and exit semantics. The Python package and source filenames remain `domain_security_scanner` and `domain_security_scan.py`; `domeval` is the shorter operator-facing command name.
 
 ## Usage
 
 ```text
-python domain_security_scan.py DOMAIN --authorized [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX] [--json-only]
-python domain_security_scan.py --diff OLD_JSON NEW_JSON
+domeval scan DOMAIN [--authorized] [--scan GROUPS] [--skip GROUPS] [--max-pages N] [--max-hosts N] [--out PREFIX] [--json-only | --json-stdout] [-v | -vv | -q]
+domeval diff OLD_JSON NEW_JSON
 ```
+
+Use `domeval --help`, `domeval scan --help`, and `domeval diff --help` for the
+current built-in help. Option details and defaults are collected in the
+[CLI reference](docs/CLI_REFERENCE.md).
+
+The CLI uses explicit commands. The previous flat script forms (`python domain_security_scan.py DOMAIN ...` and `python domain_security_scan.py --diff ...`) are no longer accepted.
 
 Examples:
 
 ```bash
-# Default: run all six scan groups
-python domain_security_scan.py shop.example.com --authorized
+# Interactive full scan; asks for authorization confirmation
+domeval scan shop.example.com
+
+# Non-interactive full scan; --authorized skips the confirmation prompt
+domeval scan shop.example.com --authorized
 
 # Run only selected groups
-python domain_security_scan.py example.com --authorized --scan mail,web
+domeval scan example.com --authorized --scan mail,web
 
 # Run the default full scan except selected groups
-python domain_security_scan.py example.com --authorized --skip discovery,cms
+domeval scan example.com --authorized --skip discovery,cms
 
 # --skip wins when the same group appears in both lists
-python domain_security_scan.py example.com --authorized --scan mail,web --skip mail
+domeval scan example.com --authorized --scan mail,web --skip mail
 
 # Generate structured JSON without creating a PDF
-python domain_security_scan.py example.com --authorized --json-only
+domeval scan example.com --authorized --json-only
 
-# Compare two existing JSON reports; no scan or authorization flag is needed
-python domain_security_scan.py --diff previous.json current.json
+# Stream machine-readable JSON without generating files
+domeval scan example.com --authorized --json-stdout
 
-python domain_security_scan.py example.com --authorized --max-pages 15 --max-hosts 20
-python domain_security_scan.py example.com --authorized --out customer-example
+# Extra progress, detailed diagnostics, or quiet operation
+domeval scan example.com --authorized -v --json-only
+domeval scan example.com --authorized -vv --json-only
+domeval scan example.com --authorized --quiet --json-stdout
+
+# Compare two existing JSON reports; no scan authorization is needed
+domeval diff previous.json current.json
+
+domeval scan example.com --authorized --max-pages 15 --max-hosts 20
+domeval scan example.com --authorized --out customer-example
 ```
 
-The `--authorized` flag is deliberately mandatory for scan mode. Diff mode reads only local JSON reports and does not require authorization.
+Authorization is required for scans. In an interactive terminal, omitting `--authorized` triggers a confirmation prompt before scanning. In non-interactive use, missing `--authorized` fails immediately with exit code `2` and advises rerunning with the flag. The `--authorized` flag skips the prompt. The `diff` command reads only local JSON reports and never requires scan authorization.
+
+Default scans write `security-report-<domain>.json` and
+`security-report-<domain>.pdf` (or `<PREFIX>.json` and `<PREFIX>.pdf` with
+`--out PREFIX`). `-v` increases operational detail, `-vv` enables diagnostics,
+and `--quiet` suppresses routine status/warnings while keeping errors and
+explicitly requested JSON. These logging modes are mutually exclusive.
+
+**Exit statuses describe command execution, not the target's security.** A
+completed scan returns `0` even if it includes `ACTION` or `REVIEW` findings;
+inconclusive `VERIFY`/`UNKNOWN` evidence does not by itself cause failure. Scan
+errors use `2` for invalid usage/authorization, `3` for unrecoverable scanning,
+`4` for output failure, and `130` for interruption. For `diff`, `0` means no
+meaningful differences, `1` means differences, and `2` means invalid input.
+See [CLI exit codes](docs/CLI_EXIT_CODES.md) and the
+[CLI reference](docs/CLI_REFERENCE.md) for details and safe automation examples.
 
 ## Scan groups
 
@@ -337,12 +407,14 @@ See [`docs/STANDARDS.md`](docs/STANDARDS.md) for the RFC/standards registry and 
 
 ## Project structure
 
-The scanner is organized as a Python package while keeping `domain_security_scan.py` as the command-line entry point. The six functional scan groups live under `domain_security_scanner/domains/`; selection policy and prerequisite ordering are centralized in `orchestration.py`.
+The scanner is organized as an installable Python package. `domeval` is the preferred installed command, `domain-security-scan` is the compatibility console alias, and `domain_security_scan.py` remains the source-tree compatibility script. The six functional scan groups live under `domain_security_scanner/domains/`; selection policy and prerequisite ordering are centralized in `orchestration.py`.
 
 ```text
-domain_security_scan.py              # CLI entry point
+pyproject.toml                        # packaging metadata and console entry points
+domain_security_scan.py              # source-tree compatibility entry point
 domain_security_scanner/
 ├── __init__.py                       # public package API
+├── __main__.py                       # python -m domain_security_scanner entry point
 ├── version.py                        # scanner version
 ├── constants.py                      # shared scanner constants
 ├── models.py                         # typed check/status/category/score result models

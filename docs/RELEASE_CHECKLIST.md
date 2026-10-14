@@ -44,6 +44,28 @@ Every pull request merged into `main` represents a versioned release. Urgent sec
 - [ ] Confirm `LICENSE` and copyright text are unchanged unless intentionally revised.
 - [ ] Commit and push the release-preparation changes to `develop`.
 
+## v1.4.0 CLI release validation
+
+In addition to the existing security/DNS and report gates, validate the actual
+v1.4.0 release candidate using the documented public CLI contract:
+
+- [ ] Check `domeval`, `domain-security-scan`,
+      `python -m domain_security_scanner`, and `python domain_security_scan.py`
+      all report the correct version and support equivalent commands.
+- [ ] Compare top-level, `scan`, and `diff` help with
+      [CLI_REFERENCE.md](CLI_REFERENCE.md); reject the removed flat syntax.
+- [ ] Confirm scan authorization interactively and with non-interactive
+      `--authorized`, only against targets you own or may assess.
+- [ ] Verify `--scan`/`--skip`, bounded scan limits, `-v`, `-vv`, and `--quiet`.
+- [ ] Check `--json-only` versus `--json-stdout`, stdout JSON validity,
+      stderr-only diagnostics, and explicitly disallowed flag combinations.
+- [ ] Exercise mocked scan status `0/2/3/4/130` and distinct local diff
+      status `0/1/2/130` cases without unauthorized network activity.
+- [ ] Confirm cross-platform installed-entry-point and subprocess tests on
+      Windows/Linux CI for the supported Python versions.
+- [ ] Confirm README/CLI reference/exit-code docs, package metadata,
+      CHANGELOG, and actual CLI behavior agree; check the release date.
+
 ## Release pull request
 
 For a normal release:

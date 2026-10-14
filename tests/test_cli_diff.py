@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -30,13 +29,12 @@ class CliDiffModeTest(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
-            patch.object(sys, "argv", ["domain_security_scan.py", *args]),
             patch.object(cli, "Scanner") as scanner,
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
             try:
-                code = cli.main()
+                code = cli.main(args)
             except SystemExit as exc:
                 code = exc.code
         return code, stdout.getvalue(), stderr.getvalue(), scanner
@@ -51,7 +49,7 @@ class CliDiffModeTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            code, stdout, stderr, scanner = self._run(["--diff", str(old), str(new)])
+            code, stdout, stderr, scanner = self._run(["diff", str(old), str(new)])
 
             self.assertEqual(code, 0)
             self.assertIn("No meaningful differences.", stdout)
@@ -65,7 +63,7 @@ class CliDiffModeTest(unittest.TestCase):
             old.write_text(json.dumps(_report()), encoding="utf-8")
             new.write_text(json.dumps(_report(score={"score": 90})), encoding="utf-8")
 
-            code, stdout, _, scanner = self._run(["--diff", str(old), str(new)])
+            code, stdout, _, scanner = self._run(["diff", str(old), str(new)])
 
             self.assertEqual(code, 1)
             self.assertIn("CHANGED", stdout)
@@ -78,18 +76,19 @@ class CliDiffModeTest(unittest.TestCase):
             old.write_text("{broken", encoding="utf-8")
             new.write_text(json.dumps(_report()), encoding="utf-8")
 
-            code, _, stderr, scanner = self._run(["--diff", str(old), str(new)])
+            code, _, stderr, scanner = self._run(["diff", str(old), str(new)])
 
             self.assertEqual(code, 2)
             self.assertIn("Diff error:", stderr)
             scanner.assert_not_called()
 
-    def test_scan_and_diff_modes_are_mutually_exclusive(self):
+    def test_diff_rejects_scan_only_options_before_scanner_activity(self):
         code, _, stderr, scanner = self._run(
-            ["example.com", "--authorized", "--diff", "old.json", "new.json"]
+            ["diff", "old.json", "new.json", "--authorized"]
         )
+
         self.assertEqual(code, 2)
-        self.assertIn("cannot be combined", stderr)
+        self.assertIn("unrecognized arguments: --authorized", stderr)
         scanner.assert_not_called()
 
 

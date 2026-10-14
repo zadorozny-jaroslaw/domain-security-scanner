@@ -23,28 +23,30 @@ There are currently no public aliases such as `all` or `infra`. The accepted nam
 
 ## CLI selection rules
 
+Scan-group options belong to the explicit `scan` command.
+
 With no selection flags, the scanner runs all six groups:
 
 ```bash
-python domain_security_scan.py example.com --authorized
+python domain_security_scan.py scan example.com --authorized
 ```
 
 Use `--scan` to include only listed groups:
 
 ```bash
-python domain_security_scan.py example.com --authorized --scan mail,web
+python domain_security_scan.py scan example.com --authorized --scan mail,web
 ```
 
 Use `--skip` to remove groups from the default full scan:
 
 ```bash
-python domain_security_scan.py example.com --authorized --skip discovery,cms
+python domain_security_scan.py scan example.com --authorized --skip discovery,cms
 ```
 
 Both flags may be present. `--skip` has higher priority:
 
 ```bash
-python domain_security_scan.py example.com --authorized \
+python domain_security_scan.py scan example.com --authorized \
   --scan domain,mail,web \
   --skip mail
 ```
@@ -54,6 +56,8 @@ The effective scope in that example is `domain,web`. The CLI prints a warning wh
 Group lists are comma-separated, case-insensitive, and deduplicated. Internally, effective selections are normalized back to canonical group order.
 
 If all groups are removed, the scanner warns that no functional scan groups remain and produces a context-only report with no scan findings.
+
+Authorization behavior is independent of scan-group selection. In an interactive terminal, omitting `--authorized` triggers a confirmation prompt before scanning. Non-interactive invocations must pass `--authorized`; otherwise the command exits before scanner activity begins.
 
 ## Findings versus prerequisite context
 

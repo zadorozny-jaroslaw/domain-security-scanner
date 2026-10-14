@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 
@@ -18,6 +19,10 @@ from .models import (
     DnsQueryState,
     DnsTransport,
 )
+from .runtime_logging import TRACE_LEVEL
+
+
+logger = logging.getLogger(__name__)
 
 
 class DnsEvidenceMixin:
@@ -84,7 +89,7 @@ class DnsEvidenceMixin:
         want_dnssec: bool = False,
         recursion_desired: bool = False,
     ) -> DnsQueryCacheKey:
-        """Return a context-complete authoritative DNS cache key."""
+        """Return a context-complete authoritative query profile."""
         return cls._dns_cache_key(
             host,
             rtype,
@@ -96,6 +101,70 @@ class DnsEvidenceMixin:
             edns_payload=edns_payload,
             want_dnssec=want_dnssec,
             recursion_desired=recursion_desired,
+        )
+
+    @staticmethod
+    def _trace_recursive_dns_result(
+        result: DnsQueryResult,
+        *,
+        cache_hit: bool,
+        elapsed_ms: float | None = None,
+    ) -> None:
+        """Emit bounded recursive DNS diagnostics without record/error payloads."""
+        if cache_hit:
+            logger.log(
+                TRACE_LEVEL,
+                "DNS cache hit: recursive %s %s -> %s",
+                result.qname,
+                result.qtype,
+                result.state.value,
+            )
+            return
+
+        logger.log(
+            TRACE_LEVEL,
+            "DNS recursive: %s %s -> %s (%.3fms)",
+            result.qname,
+            result.qtype,
+            result.state.value,
+            elapsed_ms if elapsed_ms is not None else 0.0,
+        )
+
+    @staticmethod
+    def _trace_authoritative_dns_result(
+        result: DnsQueryResult,
+        *,
+        cache_hit: bool,
+    ) -> None:
+        """Emit bounded direct-DNS diagnostics without record/error payloads."""
+        transport = (
+            result.transport.value
+            if isinstance(result.transport, DnsTransport)
+            else str(result.transport or "udp")
+        )
+        server_ip = result.server_ip or "unknown"
+
+        if cache_hit:
+            logger.log(
+                TRACE_LEVEL,
+                "DNS cache hit: authoritative %s %s via %s %s -> %s",
+                result.qname,
+                result.qtype,
+                transport,
+                server_ip,
+                result.state.value,
+            )
+            return
+
+        logger.log(
+            TRACE_LEVEL,
+            "DNS authoritative: %s %s via %s %s -> %s (%.3fms)",
+            result.qname,
+            result.qtype,
+            transport,
+            server_ip,
+            result.state.value,
+            result.elapsed_ms if result.elapsed_ms is not None else 0.0,
         )
 
     def dns_cached_result(
@@ -144,8 +213,10 @@ class DnsEvidenceMixin:
 
         cached = self.dns_query_cache.get(cache_key)
         if cached is not None:
+            self._trace_recursive_dns_result(cached, cache_hit=True)
             return cached
 
+        started = time.perf_counter()
         try:
             ans = self.resolver.resolve(
                 host_key,
@@ -204,7 +275,13 @@ class DnsEvidenceMixin:
                 query_mode=DnsQueryMode.RECURSIVE,
             )
 
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
         self.dns_query_cache[cache_key] = result
+        self._trace_recursive_dns_result(
+            result,
+            cache_hit=False,
+            elapsed_ms=elapsed_ms,
+        )
         return result
 
     def dns_query(self, host: str, rtype: str) -> list[str]:
@@ -328,6 +405,7 @@ class DnsEvidenceMixin:
         )
         cached = self.dns_query_cache.get(cache_key)
         if cached is not None:
+            self._trace_authoritative_dns_result(cached, cache_hit=True)
             return cached
 
         qname = cache_key.qname
@@ -443,6 +521,7 @@ class DnsEvidenceMixin:
             )
 
         self.dns_query_cache[cache_key] = result
+        self._trace_authoritative_dns_result(result, cache_hit=False)
         return result
 
     @staticmethod

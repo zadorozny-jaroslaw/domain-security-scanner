@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from datetime import datetime, timezone
 
 from .base import BaseScanner
@@ -31,7 +33,11 @@ from .orchestration import (
     build_scan_selection_context,
     normalize_scan_groups,
 )
+from .runtime_logging import TRACE_LEVEL
 from .version import __version__
+
+
+logger = logging.getLogger(__name__)
 
 
 class Scanner(
@@ -112,13 +118,100 @@ class Scanner(
         return super().add_check(*args, **kwargs)
 
     def run(self):
-        for step in build_scan_plan(self.scan_groups):
-            method = getattr(self, step.method_name)
-            self._run_group_step(
-                step.active_group,
-                method,
-                **step.call_kwargs(),
+        """Execute the selected scan plan with centralized progress diagnostics.
+
+        DEBUG reports progress for user-selected scan groups only. TRACE reports
+        every orchestration step, including prerequisite context that belongs to
+        an unselected group. Logging never changes which steps execute or how
+        their evidence is interpreted.
+        """
+        plan = build_scan_plan(self.scan_groups)
+
+        selected_step_indexes: dict[str, list[int]] = {}
+        for index, step in enumerate(plan):
+            if self.scan_group_selected(step.active_group):
+                selected_step_indexes.setdefault(step.active_group, []).append(index)
+
+        first_selected_step = {
+            group: indexes[0]
+            for group, indexes in selected_step_indexes.items()
+        }
+        last_selected_step = {
+            group: indexes[-1]
+            for group, indexes in selected_step_indexes.items()
+        }
+        group_started_at: dict[str, float] = {}
+
+        for index, step in enumerate(plan):
+            selected_step = self.scan_group_selected(step.active_group)
+
+            if (
+                selected_step
+                and first_selected_step.get(step.active_group) == index
+            ):
+                group_started_at[step.active_group] = time.perf_counter()
+                logger.debug("Starting scan group: %s", step.active_group)
+
+            if selected_step:
+                step_context = f"group={step.active_group}"
+            else:
+                step_context = f"owner={step.active_group}, prerequisite"
+
+            logger.log(
+                TRACE_LEVEL,
+                "Running step: %s [%s]",
+                step.method_name,
+                step_context,
             )
+
+            step_started_at = time.perf_counter()
+            method = getattr(self, step.method_name)
+            try:
+                self._run_group_step(
+                    step.active_group,
+                    method,
+                    **step.call_kwargs(),
+                )
+            except BaseException as exc:
+                elapsed = time.perf_counter() - step_started_at
+                logger.log(
+                    TRACE_LEVEL,
+                    "Step failed: %s [%s] (%s; %.3fs)",
+                    step.method_name,
+                    step_context,
+                    exc.__class__.__name__,
+                    elapsed,
+                )
+                if selected_step:
+                    group_started = group_started_at.get(step.active_group)
+                    if group_started is not None:
+                        logger.debug(
+                            "Scan group failed: %s (%.2fs)",
+                            step.active_group,
+                            time.perf_counter() - group_started,
+                        )
+                raise
+            else:
+                elapsed = time.perf_counter() - step_started_at
+                logger.log(
+                    TRACE_LEVEL,
+                    "Completed step: %s [%s] (%.3fs)",
+                    step.method_name,
+                    step_context,
+                    elapsed,
+                )
+
+            if (
+                selected_step
+                and last_selected_step.get(step.active_group) == index
+            ):
+                group_started = group_started_at.pop(step.active_group, None)
+                if group_started is not None:
+                    logger.debug(
+                        "Completed scan group: %s (%.2fs)",
+                        step.active_group,
+                        time.perf_counter() - group_started,
+                    )
 
     def _score_result(self) -> ScoreResult:
         applicable = [c for c in self.checks if c.applicable and c.weight > 0]

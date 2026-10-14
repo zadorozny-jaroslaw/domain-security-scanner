@@ -50,6 +50,8 @@ def load_report(path: str | Path) -> dict[str, Any]:
         data = json.loads(report_path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise ReportDiffError(f"cannot read {report_path}: {exc}") from exc
+    except UnicodeError as exc:
+        raise ReportDiffError(f"cannot decode {report_path} as UTF-8: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise ReportDiffError(
             f"invalid JSON in {report_path}: line {exc.lineno}, column {exc.colno}"
