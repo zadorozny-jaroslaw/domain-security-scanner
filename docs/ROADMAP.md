@@ -21,44 +21,64 @@ Normal feature/minor releases target a **two-week iteration**. Security fixes, d
 
 See [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) for the branch, milestone, prerelease, release, and urgent-patch process.
 
-## v1.4.0 — CLI Readiness & Automation (release preparation)
-
-The v1.4 workstreams have been implemented on the release-preparation branch,
-but **v1.4.0 is not yet a published release**. Stable publication requires the
-release PR to `main`, release validation, an annotated `v1.4.0` tag on `main`,
-and a GitHub Release. Do not tag this feature branch or `develop`.
-
-Delivered: explicit `scan` and `diff` commands; improved English help; verbose
-and quiet modes; stream-safe JSON stdout; stable CLI exit codes; installable and
-module entry points; regression tests; and automation/user documentation.
-The `--json-only` mode and semantic report comparison predate v1.4 and were
-reused, not reimplemented, in this release.
-
-- [CLI reference](CLI_REFERENCE.md) — supported user-facing interface.
-- [Exit-code contract](CLI_EXIT_CODES.md) — automation and failure semantics.
-- [v1.4 implementation plan](V1_4_CLI_PLAN.md) — preserved historical planning record.
-- [Release checklist](RELEASE_CHECKLIST.md) — remaining gates and publishing workflow.
-- [Changelog](../CHANGELOG.md) — implementation and release summary.
-
-This roadmap does not repeat the completed v1.4 workstream checklists; GitHub
-milestone/issues and the release checklist track the remaining release gate.
-
-## Next candidate: v1.5.0
+## Current planned release: v1.5.0
 
 ### Theme
 
 **TLS & Certificate Posture**
 
-Candidate scope after v1.4.0:
+v1.5.0 focuses on clearer, standards-grounded evidence for HTTPS certificate
+identity and TLS protocol posture on the **exact requested web host**. It builds
+on the current TLS checks; it does not expand the default scanner into an
+exhaustive cipher enumerator or a port scanner.
 
-- certificate identity and SAN/wildcard handling;
-- chain and issuer evidence;
-- key type/size and signature algorithm;
-- TLS 1.2/1.3 posture and bounded legacy/weak configuration checks;
-- revocation/stapling evidence where reliably observable;
-- clearer TLS-specific reporting and JSON structure.
+### Selected RFCs (six)
 
-The final v1.5.0 scope should be decided after v1.4.0 is released and its follow-up issues are reviewed.
+| RFC | Planned external check | Key boundary |
+| --- | --- | --- |
+| [RFC 9325](https://www.rfc-editor.org/info/rfc9325) | Apply contemporary TLS security recommendations to observed negotiation and configuration evidence | Bounded HTTPS/TLS posture only; no DTLS scanning and no claims based on untested cipher suites |
+| [RFC 8446](https://www.rfc-editor.org/info/rfc8446) | Record and interpret confirmed TLS 1.3 negotiation, protocol and selected cipher | Do not imply every optional TLS 1.3 feature was tested |
+| [RFC 5246](https://www.rfc-editor.org/info/rfc5246) | Record and interpret confirmed TLS 1.2 negotiation and cipher information | TLS 1.2 is not automatically a failure merely because TLS 1.3 exists |
+| [RFC 8996](https://www.rfc-editor.org/info/rfc8996) | Detect confirmed TLS 1.0 and TLS 1.1 support, which has been deprecated | If the client cannot probe an old version, record unknown rather than claiming the server rejects it |
+| [RFC 7568](https://www.rfc-editor.org/info/rfc7568) | Assess observable SSLv3 support or state that the local client cannot test it | Modern TLS libraries often disable SSLv3; never infer server support or rejection from a locally unavailable probe |
+| [RFC 9525](https://www.rfc-editor.org/info/rfc9525) | Assess HTTPS certificate DNS service identity using SAN DNS-IDs and valid wildcard matching | Trust chain and hostname-verification errors must be distinguished from transport or unavailable evidence; do not use CN-only identity fallback |
+
+These are the **selected v1.5 RFCs**, not a list of all RFCs worth supporting.
+The concrete checks and acceptance criteria will be split into focused GitHub
+issues. RFC 9325 supplies security recommendations; RFCs 5246 and 8446 provide
+protocol context. RFCs 8996 and 7568 cover obsolete versions, while RFC 9525
+covers certificate service identity.
+
+### Proposed implementation workstreams
+
+1. **Protocol evidence and classification** — reuse the existing bounded TLS
+   1.2/1.3/legacy probes; separate confirmed negotiation, confirmed rejection,
+   and cases that cannot be tested with the host's OpenSSL/Python runtime.
+   Map observations to the RFC 9325, 8996, and 7568 recommendations.
+2. **Certificate identity** — review SAN DNS-IDs, wildcard/name matching and
+   trust-verification outcomes for the exact target using RFC 9525. Keep
+   untrusted/incomplete certificate information separate from verified identity.
+3. **Report integration and regression coverage** — add focused evidence and
+   concise findings to existing TLS JSON/PDF outputs, preserve scoring policy
+   unless a deliberate scoped change is reviewed, and test Windows/Linux runtime
+   differences with mocked handshakes and deterministic fixtures.
+
+### Completion and safety requirements
+
+- Only perform small, bounded TLS connections to the authorized web target;
+  no broad port scanning, exploitation, cipher-suite sweeps, or load testing.
+- Avoid converting local TLS-library limitations, timeouts, or ambiguous
+  handshakes into confident server-side pass/fail findings.
+- Clearly distinguish an insecure **observed** configuration from an
+  unobservable or unsupported protocol probe (`VERIFY`/`UNKNOWN`).
+- Do not let scan-group selection or CLI verbosity change the security evidence;
+  preserve the documented CLI exit-code and output-stream contract.
+- Keep additive report changes backwards-compatible where possible and cover
+  certificate identity, protocol policy, unsupported probe paths, and false
+  positives with automated tests.
+- Pass full regression tests and perform an explicitly authorized, low-impact
+  smoke test before release. The release date and issue scope remain subject to
+  milestone review; completing v1.4.0 publication is a separate prerequisite.
 
 ## Later candidates
 
