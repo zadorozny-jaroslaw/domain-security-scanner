@@ -232,25 +232,30 @@ For direct piping into a consumer, use your shell's `pipefail` support or
 capture the scanner's exit status explicitly. Without that, a downstream
 command's success might conceal an upstream scanner failure.
 
-### PowerShell: save JSON and verify success
+### PowerShell: save UTF-8 JSON and verify success
 
 ```powershell
 # Replace example.com with your authorized target.
-domeval scan example.com --authorized --json-stdout > report.json
+# Works in Windows PowerShell 5.1 and PowerShell 7+.
+domeval scan example.com --authorized --json-only --out report
 $status = $LASTEXITCODE
 if ($status -ne 0) {
     Remove-Item report.json -ErrorAction SilentlyContinue
     throw "Scan failed with exit code $status"
 }
 
-$report = Get-Content report.json -Raw -Encoding utf8 | ConvertFrom-Json
+$report = Get-Content report.json -Raw -Encoding UTF8 | ConvertFrom-Json
 $report.score.score
 ```
 
-In PowerShell, read `$LASTEXITCODE` immediately after the native scanner
-command, before calling other native commands. Redirected text encoding can
-vary across PowerShell versions; use a Unicode-capable environment for reports
-containing non-ASCII text.
+Read `$LASTEXITCODE` immediately after the native scanner command, before
+calling other native commands. This uses the scanner's JSON file writer, so the
+report stays UTF-8 across PowerShell versions. Avoid redirecting native stdout
+with `--json-stdout > report.json` in Windows PowerShell 5.1: `>` writes
+UTF-16LE by default, which may surprise UTF-8 JSON consumers. PowerShell 7
+uses UTF-8 redirection; for cross-version file automation, prefer `--json-only`
+with `--out` as above. For direct stdout consumers, `--json-stdout` is still
+available; check the scanner's process exit status before trusting its output.
 
 ### CI: distinguish report differences from errors
 
